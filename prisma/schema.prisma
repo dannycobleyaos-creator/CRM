@@ -1,0 +1,353 @@
+// Hygge Pergola CRM — data model
+//
+// One record per customer, one timeline per record. Everything that used to
+// live in Trello, Slack, Aircall, tawk.to or somebody's head lands here so an
+// agent never has to leave the portal to do their job.
+//
+// SQLite is the default so the portal runs with zero infrastructure. Prisma
+// enums are not supported on SQLite, so status-style columns are `String` and
+// their allowed values are declared once in `src/lib/constants.ts`.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// People
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         String    @default("AGENT") // AGENT | TEAM_LEAD | MANAGER | ADMIN
+  team         String    @default("Customer Care") // Sales | Customer Care | Installations | Warehouse
+  jobTitle     String?
+  phoneExt     String?
+  aircallId    String? // links an Aircall agent to this CRM user
+  avatarTone   String    @default("ember") // ember | moss | sky | anthracite | clay | amber
+  isActive     Boolean   @default(true)
+  dailyTarget  Int       @default(12) // tasks/tickets expected to be cleared per day
+  createdAt    DateTime  @default(now())
+  lastLoginAt  DateTime?
+
+  ownedCustomers    Customer[]         @relation("CustomerOwner")
+  ownedOrders       Order[]            @relation("OrderOwner")
+  assignedTickets   Ticket[]           @relation("TicketAssignee")
+  assignedTasks     Task[]             @relation("TaskAssignee")
+  createdTasks      Task[]             @relation("TaskCreator")
+  requestedParts    PartRequest[]      @relation("PartRequester")
+  announcements     Announcement[]
+  announcementReads AnnouncementRead[]
+  activities        Activity[]
+
+  @@index([role])
+  @@index([team])
+}
+
+// ---------------------------------------------------------------------------
+// Customers and orders
+// ---------------------------------------------------------------------------
+
+model Customer {
+  id        String  @id @default(cuid())
+  ref       String  @unique // HP-00142
+  name      String
+  email     String?
+  phone     String?
+  company   String?
+  addressL1 String?
+  addressL2 String?
+  city      String?
+  county    String?
+  postcode  String?
+  country   String  @default("United Kingdom")
+
+  // WEBSITE | AIRCALL | TAWK | REFERRAL | SHOWROOM | SOCIAL | TRADE
+  source String @default("WEBSITE")
+  // LEAD | QUOTED | WON | IN_PRODUCTION | INSTALLED | AFTERCARE | LOST
+  stage  String @default("LEAD")
+
+  ownerId String?
+  owner   User?   @relation("CustomerOwner", fields: [ownerId], references: [id])
+
+  tags      String? // comma separated, e.g. "vip,trade,repeat"
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders       Order[]
+  tickets      Ticket[]
+  tasks        Task[]
+  partRequests PartRequest[]
+  activities   Activity[]
+
+  @@index([stage])
+  @@index([ownerId])
+  @@index([name])
+}
+
+model Order {
+  id         String   @id @default(cuid())
+  ref        String   @unique // HP-ORD-1042
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  productLine String // "Hygge Aluminium Pergola 4x3m"
+  sizeSpec    String? // "4m x 3m, wall mounted"
+  colour      String  @default("MATT_GREY") // MATT_GREY | MATT_WHITE
+  extras      String? // "LED lighting, 3 windproof blinds, drainage"
+  value       Float   @default(0)
+
+  // QUOTE | DEPOSIT_PAID | IN_PRODUCTION | READY | SCHEDULED | DELIVERED | INSTALLED | CANCELLED
+  status String @default("QUOTE")
+
+  ownerId String?
+  owner   User?   @relation("OrderOwner", fields: [ownerId], references: [id])
+
+  orderedAt    DateTime  @default(now())
+  deliveryDue  DateTime?
+  installedAt  DateTime?
+  installerRef String?
+
+  tickets      Ticket[]
+  tasks        Task[]
+  partRequests PartRequest[]
+  activities   Activity[]
+
+  @@index([status])
+  @@index([customerId])
+}
+
+// ---------------------------------------------------------------------------
+// Cases (the single inbox: phone, chat, email, social)
+// ---------------------------------------------------------------------------
+
+model Ticket {
+  id      String  @id @default(cuid())
+  ref     String  @unique // CASE-2041
+  subject String
+  body    String?
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  orderId    String?
+  order      Order?   @relation(fields: [orderId], references: [id])
+
+  // PHONE | CHAT | EMAIL | WHATSAPP | SOCIAL | INTERNAL
+  channel  String @default("EMAIL")
+  // WARRANTY | MISSING_PARTS | DAMAGE | INSTALL_SUPPORT | DELIVERY | SALES_ENQUIRY | BILLING | OTHER
+  category String @default("OTHER")
+  // LOW | NORMAL | HIGH | URGENT
+  priority String @default("NORMAL")
+  // NEW | OPEN | WAITING_CUSTOMER | WAITING_SUPPLIER | RESOLVED | CLOSED
+  status   String @default("NEW")
+
+  assigneeId String?
+  assignee   User?   @relation("TicketAssignee", fields: [assigneeId], references: [id])
+
+  openedAt        DateTime  @default(now())
+  firstResponseAt DateTime?
+  resolvedAt      DateTime?
+  dueAt           DateTime? // SLA deadline
+  slaMinutes      Int       @default(240)
+  reopenCount     Int       @default(0)
+  satisfaction    Int? // 1-5 CSAT once resolved
+
+  tasks        Task[]
+  partRequests PartRequest[]
+  activities   Activity[]
+
+  @@index([status])
+  @@index([assigneeId])
+  @@index([dueAt])
+  @@index([priority])
+}
+
+// ---------------------------------------------------------------------------
+// Work (the Trello replacement — explicit states, explicit owners)
+// ---------------------------------------------------------------------------
+
+model Task {
+  id      String  @id @default(cuid())
+  title   String
+  details String?
+
+  // TODO | IN_PROGRESS | BLOCKED | AWAITING_OTHERS | DONE
+  status   String @default("TODO")
+  // LOW | NORMAL | HIGH | URGENT
+  priority String @default("NORMAL")
+  // CALLBACK | ADMIN | DISPATCH | INSTALL | SALES | ESCALATION | SUPPLIER | OTHER
+  category String @default("OTHER")
+
+  assigneeId  String?
+  assignee    User?   @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  createdById String
+  createdBy   User    @relation("TaskCreator", fields: [createdById], references: [id])
+
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
+  ticketId   String?
+  ticket     Ticket?   @relation(fields: [ticketId], references: [id])
+  orderId    String?
+  order      Order?    @relation(fields: [orderId], references: [id])
+
+  dueAt       DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+  blockedNote String?
+  position    Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([status])
+  @@index([assigneeId])
+  @@index([dueAt])
+}
+
+// ---------------------------------------------------------------------------
+// Parts dispatch
+// ---------------------------------------------------------------------------
+
+model Part {
+  id           String  @id @default(cuid())
+  sku          String  @unique
+  name         String
+  category     String  @default("SPARE") // LOUVRE | FIXING | MOTOR | LED | BLIND | GASKET | SPARE
+  stockQty     Int     @default(0)
+  reorderLevel Int     @default(5)
+  unitCost     Float   @default(0)
+  location     String? // warehouse bay
+
+  lines PartRequestLine[]
+
+  @@index([category])
+}
+
+model PartRequest {
+  id  String @id @default(cuid())
+  ref String @unique // DSP-3081
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  orderId    String?
+  order      Order?   @relation(fields: [orderId], references: [id])
+  ticketId   String?
+  ticket     Ticket?  @relation(fields: [ticketId], references: [id])
+
+  requestedById String
+  requestedBy   User   @relation("PartRequester", fields: [requestedById], references: [id])
+
+  // REQUESTED | APPROVED | PICKING | AWAITING_STOCK | DISPATCHED | DELIVERED | CANCELLED
+  status   String  @default("REQUESTED")
+  // LOW | NORMAL | HIGH | URGENT
+  priority String  @default("NORMAL")
+  reason   String? // "Storm damage — replacing 3 louvres under warranty"
+
+  carrier     String? // DPD | Royal Mail | Palletways | Own van
+  trackingRef String?
+  shipToName  String?
+  shipToLine1 String?
+  shipToCity  String?
+  shipToPost  String?
+
+  requestedAt  DateTime  @default(now())
+  dueAt        DateTime?
+  dispatchedAt DateTime?
+  deliveredAt  DateTime?
+  notes        String?
+
+  lines      PartRequestLine[]
+  activities Activity[]
+
+  @@index([status])
+  @@index([dueAt])
+}
+
+model PartRequestLine {
+  id            String      @id @default(cuid())
+  partRequestId String
+  partRequest   PartRequest @relation(fields: [partRequestId], references: [id], onDelete: Cascade)
+  partId        String
+  part          Part        @relation(fields: [partId], references: [id])
+  qty           Int         @default(1)
+
+  @@index([partRequestId])
+}
+
+// ---------------------------------------------------------------------------
+// Announcements
+// ---------------------------------------------------------------------------
+
+model Announcement {
+  id       String @id @default(cuid())
+  title    String
+  body     String
+  // COMPANY | PROCESS | PRODUCT | URGENT | CELEBRATION
+  category String @default("COMPANY")
+
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id])
+
+  pinned      Boolean   @default(false)
+  publishedAt DateTime  @default(now())
+  expiresAt   DateTime?
+  audience    String    @default("ALL") // ALL | Sales | Customer Care | Installations | Warehouse
+
+  reads AnnouncementRead[]
+
+  @@index([publishedAt])
+}
+
+model AnnouncementRead {
+  id             String       @id @default(cuid())
+  announcementId String
+  announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  readAt         DateTime     @default(now())
+
+  @@unique([announcementId, userId])
+}
+
+// ---------------------------------------------------------------------------
+// The unified timeline — every interaction, whatever channel it arrived on
+// ---------------------------------------------------------------------------
+
+model Activity {
+  id        String  @id @default(cuid())
+  // CALL | CHAT | EMAIL | SMS | NOTE | STATUS_CHANGE | TASK | DISPATCH | SYSTEM
+  type      String
+  summary   String
+  body      String?
+  direction String? // INBOUND | OUTBOUND
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  customerId    String?
+  customer      Customer?    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  ticketId      String?
+  ticket        Ticket?      @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  orderId       String?
+  order         Order?       @relation(fields: [orderId], references: [id])
+  partRequestId String?
+  partRequest   PartRequest? @relation(fields: [partRequestId], references: [id])
+
+  // Where it came from, so records stay traceable to the source system.
+  sourceSystem String? // AIRCALL | TAWK | EMAIL | CRM | SLACK
+  sourceRef    String? // external id from that system
+  durationSec  Int?
+
+  occurredAt DateTime @default(now())
+
+  @@index([customerId, occurredAt])
+  @@index([ticketId, occurredAt])
+  @@index([type])
+}

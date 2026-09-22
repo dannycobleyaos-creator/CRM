@@ -1,0 +1,157 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* --------------------------------------------------------------------------
+   Hygge Pergola — brand tokens
+   Matt anthracite aluminium, warm Nordic neutrals, one ember accent that
+   echoes the integrated LED lighting. Change these and the portal re-skins.
+   -------------------------------------------------------------------------- */
+
+:root {
+  --hygge-ink: #1c2022;
+  --hygge-charcoal: #2b3134;
+  --hygge-anthracite: #3b4448;
+  --hygge-slate: #6e7a7f;
+  --hygge-mist: #c3cacd;
+  --hygge-stone: #ded6c9;
+  --hygge-sand: #ece5da;
+  --hygge-linen: #f7f4ef;
+  --hygge-ember: #b9763c;
+  --hygge-ember-dark: #965c2c;
+  --hygge-moss: #566b52;
+  --hygge-sky: #4a7787;
+  --hygge-amber: #b98a32;
+  --hygge-clay: #a6453c;
+}
+
+@layer base {
+  * {
+    @apply border-stone;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-linen text-ink antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-display tracking-tight text-ink;
+  }
+
+  /* A quiet, brand-toned scrollbar rather than the default OS one. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(110, 122, 127, 0.3);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(110, 122, 127, 0.55);
+    background-clip: content-box;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--hygge-ember);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* The eyebrow label used across the brand: small, spaced, upper case. */
+  .brand-eyebrow {
+    @apply text-2xs font-semibold uppercase tracking-brand text-slate;
+  }
+
+  .card {
+    @apply rounded-brand border border-stone/70 bg-white shadow-card;
+  }
+
+  .card-muted {
+    @apply rounded-brand border border-stone/70 bg-sand/40;
+  }
+
+  /* Dense data tables — the shape most of the portal is made of. */
+  .data-table {
+    @apply w-full border-collapse text-sm;
+  }
+  .data-table thead th {
+    @apply border-b border-stone bg-sand/50 px-4 py-2.5 text-left text-2xs font-semibold uppercase tracking-brand text-slate;
+  }
+  .data-table tbody td {
+    @apply border-b border-stone/60 px-4 py-3 align-middle text-ink;
+  }
+  .data-table tbody tr:last-child td {
+    @apply border-b-0;
+  }
+  .data-table tbody tr {
+    @apply transition-colors;
+  }
+  .data-table tbody tr:hover {
+    @apply bg-sand/40;
+  }
+
+  .field-label {
+    @apply mb-1.5 block text-2xs font-semibold uppercase tracking-brand text-slate;
+  }
+
+  .field {
+    @apply w-full rounded-brand border border-stone bg-white px-3 py-2 text-sm text-ink shadow-sm
+           transition placeholder:text-slate/60
+           focus:border-ember focus:outline-none focus:ring-4 focus:ring-ember/15;
+  }
+
+  select.field {
+    @apply appearance-none bg-[length:16px] bg-[right_0.65rem_center] bg-no-repeat pr-9;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236e7a7f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  }
+
+  /* Hairline separator used inside dark surfaces. */
+  .rule-dark {
+    @apply border-white/10;
+  }
+}
+
+/* A restrained grain/vignette on the sign-in canvas — warmth without noise. */
+.brand-canvas {
+  background-color: var(--hygge-charcoal);
+  background-image:
+    radial-gradient(1200px 600px at 80% -10%, rgba(185, 118, 60, 0.26), transparent 60%),
+    radial-gradient(900px 500px at 10% 110%, rgba(74, 119, 135, 0.22), transparent 55%),
+    linear-gradient(160deg, #2b3134 0%, #1c2022 100%);
+}
+
+/* The louvre motif from the product, used as a subtle brand texture. */
+.louvre-texture {
+  background-image: repeating-linear-gradient(
+    102deg,
+    rgba(255, 255, 255, 0.05) 0px,
+    rgba(255, 255, 255, 0.05) 1px,
+    transparent 1px,
+    transparent 13px
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

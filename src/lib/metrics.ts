@@ -29,6 +29,7 @@ export async function getDaySummary(userId: string, dailyTarget: number): Promis
   const dayStart = startOfDay(now);
   const dayEnd = endOfDay(now);
 
+
   const [
     tasksDueToday,
     tasksOverdue,
@@ -39,11 +40,14 @@ export async function getDaySummary(userId: string, dailyTarget: number): Promis
     announcementTotal,
     readCount,
   ] = await Promise.all([
+    // "Due today" is what is still ahead of you today; anything whose time has
+    // already passed counts as overdue, even if it was only due this morning.
+    // The two never overlap, so the tiles cannot contradict the list below them.
     db.task.count({
-      where: { assigneeId: userId, status: { not: 'DONE' }, dueAt: { gte: dayStart, lte: dayEnd } },
+      where: { assigneeId: userId, status: { not: 'DONE' }, dueAt: { gte: now, lte: dayEnd } },
     }),
     db.task.count({
-      where: { assigneeId: userId, status: { not: 'DONE' }, dueAt: { lt: dayStart } },
+      where: { assigneeId: userId, status: { not: 'DONE' }, dueAt: { lt: now } },
     }),
     db.task.count({
       where: { assigneeId: userId, status: 'DONE', completedAt: { gte: dayStart, lte: dayEnd } },

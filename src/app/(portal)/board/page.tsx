@@ -8,7 +8,7 @@ import {
   TASK_STATUS_META,
   type TaskStatus,
 } from '@/lib/constants';
-import { endOfDay, startOfDay } from '@/lib/utils';
+import { endOfDay } from '@/lib/utils';
 
 import { PageHeader } from '@/components/ui/page-header';
 import { FilterTabs } from '@/components/ui/filter-tabs';
@@ -33,8 +33,8 @@ export default async function BoardPage({ searchParams }: { searchParams: Promis
   if (who === 'mine') where.assigneeId = user.id;
   else if (who === 'team') where.assignee = { team: user.team };
 
-  if (due === 'overdue') where.dueAt = { lt: startOfDay(now) };
-  else if (due === 'today') where.dueAt = { gte: startOfDay(now), lte: endOfDay(now) };
+  if (due === 'overdue') where.dueAt = { lt: now };
+  else if (due === 'today') where.dueAt = { gte: now, lte: endOfDay(now) };
   else if (due === 'week') where.dueAt = { lte: endOfDay(new Date(now.getTime() + 7 * 864e5)) };
 
   if (q) {

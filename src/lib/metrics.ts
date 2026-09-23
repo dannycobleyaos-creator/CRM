@@ -6,7 +6,7 @@ import {
   TICKET_ACTIVE_STATUSES,
   TICKET_ON_US_STATUSES,
 } from './constants';
-import { endOfDay, percent, startOfDay } from './utils';
+import { addDays, endOfDay, percent, startOfDay } from './utils';
 
 /* -------------------------------------------------------------------------- */
 /* An agent's day                                                             */
@@ -153,7 +153,7 @@ export async function getAgentMetrics(days = 30): Promise<AgentMetrics[]> {
     }),
     db.activity.findMany({
       where: { userId: { not: null }, occurredAt: { gte: since } },
-      select: { userId: true, durationSec: true },
+      select: { userId: true, type: true, durationSec: true },
     }),
   ]);
 
@@ -178,7 +178,8 @@ export async function getAgentMetrics(days = 30): Promise<AgentMetrics[]> {
 
   const callMinsByUser = new Map<string, number>();
   for (const a of activities) {
-    if (!a.userId || !a.durationSec) continue;
+    // Call time means calls — a long live chat is not time on the phone.
+    if (!a.userId || !a.durationSec || a.type !== 'CALL') continue;
     callMinsByUser.set(a.userId, (callMinsByUser.get(a.userId) ?? 0) + a.durationSec / 60);
   }
 
@@ -355,4 +356,302 @@ export async function getCaseMix(days = 30): Promise<{ byCategory: Slice[]; byCh
       .map((row) => ({ key: row.channel, label: row.channel, value: row._count._all }))
       .sort((a, b) => b.value - a.value),
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Calls, chats and emails                                                    */
+/* -------------------------------------------------------------------------- */
+
+const UNANSWERED = new Set(['MISSED', 'VOICEMAIL']);
+const REPLY_TARGET_SEC = 4 * 3600;
+/** The hours the contact centre is open — anything outside is folded into the edges. */
+export const OPEN_HOURS = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17] as const;
+
+const avg = (values: number[]) =>
+  values.length ? Math.round(values.reduce((s, v) => s + v, 0) / values.length) : null;
+
+/** Monday to Friday between two dates, inclusive — at least one. */
+export function workingDaysBetween(from: Date, to: Date) {
+  let days = 0;
+  for (let d = startOfDay(from); d <= to; d = addDays(d, 1)) {
+    const day = d.getDay();
+    if (day !== 0 && day !== 6) days += 1;
+  }
+  return Math.max(1, days);
+}
+
+export type ContactTotals = {
+  inboundCalls: number;
+  answeredCalls: number;
+  missedCalls: number;
+  answerRate: number | null;
+  outboundCalls: number;
+  connectedOutbound: number;
+  talkSec: number;
+  avgHandleSec: number | null;
+  avgAnswerSec: number | null;
+  chats: number;
+  missedChats: number;
+  chatAnswerRate: number | null;
+  avgChatSec: number | null;
+  avgChatWaitSec: number | null;
+  emailsIn: number;
+  emailsOut: number;
+  avgReplyMins: number | null;
+  replyWithinTarget: number | null;
+  handled: number;
+  workingDays: number;
+};
+
+export type ContactPoint = { label: string; CALL: number; CHAT: number; EMAIL: number };
+export type HourPoint = { key: string; label: string; value: number; total: number; missed: number };
+
+export type PersonContacts = {
+  userId: string;
+  name: string;
+  role: string;
+  team: string;
+  avatarTone: string;
+  callsIn: number;
+  callsOut: number;
+  talkSec: number;
+  avgHandleSec: number | null;
+  chats: number;
+  avgChatSec: number | null;
+  emails: number;
+  avgReplyMins: number | null;
+  replyWithinTarget: number | null;
+  total: number;
+  perDay: number;
+};
+
+export type ContactReport = {
+  totals: ContactTotals;
+  /** Handled per bucket. Weekly points are averages per working day, so a short week never dips. */
+  series: ContactPoint[];
+  bucket: 'hour' | 'day' | 'week';
+  hours: HourPoint[];
+  people: PersonContacts[];
+  /** The window the report covers: [since, until). */
+  since: Date;
+  until: Date;
+};
+
+/**
+ * The contact centre report: every call, live chat and email the team handled,
+ * how quickly customers got a person, and who did the work. Built from the
+ * activity feed that Aircall, tawk.to and the inbox land in, so nobody fills in
+ * a tally sheet.
+ *
+ * Missed calls and chats carry no person — nobody picked them up — so they
+ * count towards the company's answer rate and never against an individual.
+ *
+ * `days: 1` is today so far, hour by hour. Anything longer covers complete days
+ * up to the end of yesterday, so a half-finished today never drags the trend
+ * line down at the end.
+ */
+export async function getContactMetrics(days: number): Promise<ContactReport> {
+  const now = new Date();
+  const today = startOfDay(now);
+  const live = days <= 1;
+  const since = live ? today : addDays(today, -days);
+  const until = live ? now : today;
+  const workingDays = live ? 1 : workingDaysBetween(since, addDays(until, -1));
+
+  const [users, rows] = await Promise.all([
+    db.user.findMany({
+      select: { id: true, name: true, role: true, team: true, avatarTone: true },
+    }),
+    db.activity.findMany({
+      where: { occurredAt: { gte: since, lt: until }, type: { in: ['CALL', 'CHAT', 'EMAIL'] } },
+      select: {
+        type: true,
+        direction: true,
+        outcome: true,
+        userId: true,
+        durationSec: true,
+        waitSec: true,
+        occurredAt: true,
+      },
+    }),
+  ]);
+
+  type Row = (typeof rows)[number];
+  const isAnsweredCall = (r: Row) =>
+    r.type === 'CALL' && r.direction === 'INBOUND' && !UNANSWERED.has(r.outcome ?? '');
+  const isMissedCall = (r: Row) =>
+    r.type === 'CALL' && r.direction === 'INBOUND' && UNANSWERED.has(r.outcome ?? '');
+  const isOutboundCall = (r: Row) => r.type === 'CALL' && r.direction === 'OUTBOUND';
+  const isChat = (r: Row) => r.type === 'CHAT' && !UNANSWERED.has(r.outcome ?? '');
+  const isMissedChat = (r: Row) => r.type === 'CHAT' && UNANSWERED.has(r.outcome ?? '');
+  const isEmailOut = (r: Row) => r.type === 'EMAIL' && r.direction === 'OUTBOUND';
+  const isEmailIn = (r: Row) => r.type === 'EMAIL' && r.direction === 'INBOUND';
+
+  const answered = rows.filter(isAnsweredCall);
+  const missedCalls = rows.filter(isMissedCall).length;
+  const outbound = rows.filter(isOutboundCall);
+  const chats = rows.filter(isChat);
+  const missedChats = rows.filter(isMissedChat).length;
+  const emailsOut = rows.filter(isEmailOut);
+  const replies = emailsOut.filter((r) => r.waitSec !== null).map((r) => r.waitSec!);
+  const numbers = (list: Row[], key: 'durationSec' | 'waitSec') =>
+    list.map((r) => r[key]).filter((v): v is number => v !== null);
+
+  const totals: ContactTotals = {
+    inboundCalls: answered.length + missedCalls,
+    answeredCalls: answered.length,
+    missedCalls,
+    answerRate: answered.length + missedCalls ? percent(answered.length, answered.length + missedCalls) : null,
+    outboundCalls: outbound.length,
+    connectedOutbound: outbound.filter((r) => r.outcome !== 'VOICEMAIL').length,
+    talkSec: [...answered, ...outbound].reduce((s, r) => s + (r.durationSec ?? 0), 0),
+    avgHandleSec: avg(numbers(answered, 'durationSec')),
+    avgAnswerSec: avg(numbers(answered, 'waitSec')),
+    chats: chats.length,
+    missedChats,
+    chatAnswerRate: chats.length + missedChats ? percent(chats.length, chats.length + missedChats) : null,
+    avgChatSec: avg(numbers(chats, 'durationSec')),
+    avgChatWaitSec: avg(numbers(chats, 'waitSec')),
+    emailsIn: rows.filter(isEmailIn).length,
+    emailsOut: emailsOut.length,
+    avgReplyMins: replies.length ? Math.round(avg(replies)! / 60) : null,
+    replyWithinTarget: replies.length
+      ? percent(replies.filter((s) => s <= REPLY_TARGET_SEC).length, replies.length)
+      : null,
+    handled: answered.length + outbound.length + chats.length + emailsOut.length,
+    workingDays,
+  };
+
+  // ---- Handled per bucket, by channel -------------------------------------
+  const bucket: ContactReport['bucket'] = live ? 'hour' : days <= 31 ? 'day' : 'week';
+  const handledRows = rows.filter(
+    (r) => isAnsweredCall(r) || isOutboundCall(r) || isChat(r) || isEmailOut(r),
+  );
+  type Channel = 'CALL' | 'CHAT' | 'EMAIL';
+  let series: ContactPoint[];
+  if (bucket === 'hour') {
+    // Only the hours that have started — the afternoon has not happened yet.
+    const hoursSoFar = OPEN_HOURS.filter((h) => h <= now.getHours());
+    series = hoursSoFar.map((h) => ({ label: hourLabel(h), CALL: 0, CHAT: 0, EMAIL: 0 }));
+    for (const r of handledRows) {
+      const point = series[clampHour(r.occurredAt.getHours()) - OPEN_HOURS[0]];
+      if (point) point[r.type as Channel] += 1;
+    }
+  } else if (bucket === 'day') {
+    const points = Array.from({ length: days }, (_, i) => {
+      const start = addDays(since, i);
+      return {
+        start,
+        label: start.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }),
+        CALL: 0,
+        CHAT: 0,
+        EMAIL: 0,
+      };
+    });
+    for (const r of handledRows) {
+      const i = Math.floor((startOfDay(r.occurredAt).getTime() - since.getTime()) / 864e5);
+      if (points[i]) points[i]![r.type as Channel] += 1;
+    }
+    // A closed weekend is not a bad day — leave empty Saturdays and Sundays out
+    // rather than drawing the line down to zero twice a week.
+    series = points
+      .filter((p) => {
+        const day = p.start.getDay();
+        return !((day === 0 || day === 6) && p.CALL + p.CHAT + p.EMAIL === 0);
+      })
+      .map(({ label, CALL, CHAT, EMAIL }) => ({ label, CALL, CHAT, EMAIL }));
+  } else {
+    // Whole weeks counted back from the end of yesterday. Each point is the
+    // average per working day, so the shorter week at the start reads true.
+    const weeks = Math.ceil(days / 7);
+    const points = Array.from({ length: weeks }, (_, k) => {
+      const end = addDays(until, -7 * (weeks - 1 - k));
+      const start = k === 0 ? since : addDays(end, -7);
+      return { start, end, sums: { CALL: 0, CHAT: 0, EMAIL: 0 } };
+    });
+    for (const r of handledRows) {
+      const point = points.find((p) => r.occurredAt >= p.start && r.occurredAt < p.end);
+      if (point) point.sums[r.type as Channel] += 1;
+    }
+    series = points.map((p) => {
+      const working = workingDaysBetween(p.start, addDays(p.end, -1));
+      const rate = (n: number) => Math.round((n / working) * 10) / 10;
+      return {
+        label: p.start.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }),
+        CALL: rate(p.sums.CALL),
+        CHAT: rate(p.sums.CHAT),
+        EMAIL: rate(p.sums.EMAIL),
+      };
+    });
+  }
+
+  // ---- When customers try to reach a person: calls and chats, answered or not
+  const hours: HourPoint[] = OPEN_HOURS.map((h) => ({
+    key: String(h),
+    label: hourLabel(h),
+    value: 0,
+    total: 0,
+    missed: 0,
+  }));
+  for (const r of rows) {
+    const live = (r.type === 'CALL' && r.direction === 'INBOUND') || r.type === 'CHAT';
+    if (!live) continue;
+    const slot = hours[clampHour(r.occurredAt.getHours()) - OPEN_HOURS[0]]!;
+    slot.total += 1;
+    if (UNANSWERED.has(r.outcome ?? '')) slot.missed += 1;
+  }
+  for (const slot of hours) slot.value = Math.round((slot.total / workingDays) * 10) / 10;
+
+  // ---- People ---------------------------------------------------------------
+  const byUser = new Map<string, Row[]>();
+  for (const r of rows) {
+    if (!r.userId) continue;
+    const list = byUser.get(r.userId);
+    if (list) list.push(r);
+    else byUser.set(r.userId, [r]);
+  }
+  const people: PersonContacts[] = users
+    .filter((u) => byUser.has(u.id))
+    .map((u) => {
+      const mine = byUser.get(u.id)!;
+      const callsIn = mine.filter(isAnsweredCall);
+      const callsOut = mine.filter(isOutboundCall);
+      const myChats = mine.filter(isChat);
+      const myEmails = mine.filter(isEmailOut);
+      const myReplies = numbers(myEmails, 'waitSec');
+      const total = callsIn.length + callsOut.length + myChats.length + myEmails.length;
+      return {
+        userId: u.id,
+        name: u.name,
+        role: u.role,
+        team: u.team,
+        avatarTone: u.avatarTone,
+        callsIn: callsIn.length,
+        callsOut: callsOut.length,
+        talkSec: [...callsIn, ...callsOut].reduce((s, r) => s + (r.durationSec ?? 0), 0),
+        avgHandleSec: avg(numbers(callsIn, 'durationSec')),
+        chats: myChats.length,
+        avgChatSec: avg(numbers(myChats, 'durationSec')),
+        emails: myEmails.length,
+        avgReplyMins: myReplies.length ? Math.round(avg(myReplies)! / 60) : null,
+        replyWithinTarget: myReplies.length
+          ? percent(myReplies.filter((s) => s <= REPLY_TARGET_SEC).length, myReplies.length)
+          : null,
+        total,
+        perDay: Math.round((total / workingDays) * 10) / 10,
+      };
+    })
+    .filter((p) => p.total > 0)
+    .sort((a, b) => b.total - a.total);
+
+  return { totals, series, bucket, hours, people, since, until };
+}
+
+function clampHour(hour: number) {
+  return Math.min(OPEN_HOURS[OPEN_HOURS.length - 1]!, Math.max(OPEN_HOURS[0], hour));
+}
+
+function hourLabel(hour: number) {
+  if (hour === 12) return '12pm';
+  return hour < 12 ? `${hour}am` : `${hour - 12}pm`;
 }

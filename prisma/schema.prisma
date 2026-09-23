@@ -46,6 +46,11 @@ model User {
   announcements     Announcement[]
   announcementReads AnnouncementRead[]
   activities        Activity[]
+  partsOrders       PartsOrder[]       @relation("PartsOrderCreator")
+  purchaseOrders    PurchaseOrder[]    @relation("PurchaseOrderCreator")
+  stockMoves        StockMove[]
+  ownedOrderDates   OrderDate[]        @relation("OrderDateOwner")
+  createdOrderDates OrderDate[]        @relation("OrderDateCreator")
 
   @@index([role])
   @@index([team])
@@ -86,6 +91,7 @@ model Customer {
   tickets      Ticket[]
   tasks        Task[]
   partRequests PartRequest[]
+  partsOrders  PartsOrder[]
   activities   Activity[]
 
   @@index([stage])
@@ -100,10 +106,14 @@ model Order {
   customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   productLine String // "Hygge Aluminium Pergola 4x3m"
+  // The catalogue product, when there is one — it is what gives the order a
+  // bill of materials, so an agent can see exactly which parts went into it.
+  productId   String?
+  product     Product? @relation(fields: [productId], references: [id])
   sizeSpec    String? // "4m x 3m, wall mounted"
-  colour      String  @default("MATT_GREY") // MATT_GREY | MATT_WHITE
+  colour      String   @default("MATT_GREY") // MATT_GREY | MATT_WHITE
   extras      String? // "LED lighting, 3 windproof blinds, drainage"
-  value       Float   @default(0)
+  value       Float    @default(0)
 
   // QUOTE | DEPOSIT_PAID | IN_PRODUCTION | READY | SCHEDULED | DELIVERED | INSTALLED | CANCELLED
   status String @default("QUOTE")
@@ -119,10 +129,39 @@ model Order {
   tickets      Ticket[]
   tasks        Task[]
   partRequests PartRequest[]
+  partsOrders  PartsOrder[]
+  keyDates     OrderDate[]
   activities   Activity[]
 
   @@index([status])
   @@index([customerId])
+}
+
+/// A date that matters on an order — survey, delivery, installation, balance
+/// due, the follow-up call. Each one has an owner and is either done or not,
+/// so "when is the install?" never needs a Slack message again.
+model OrderDate {
+  id      String @id @default(cuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  // SURVEY | DELIVERY | INSTALL | PAYMENT | FOLLOW_UP | OTHER
+  kind  String  @default("OTHER")
+  label String
+  note  String?
+
+  dueAt  DateTime
+  doneAt DateTime?
+
+  ownerId     String?
+  owner       User?    @relation("OrderDateOwner", fields: [ownerId], references: [id])
+  createdById String
+  createdBy   User     @relation("OrderDateCreator", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([orderId])
+  @@index([dueAt])
+  @@index([ownerId])
 }
 
 // ---------------------------------------------------------------------------
@@ -162,6 +201,7 @@ model Ticket {
 
   tasks        Task[]
   partRequests PartRequest[]
+  partsOrders  PartsOrder[]
   activities   Activity[]
 
   @@index([status])
@@ -219,15 +259,191 @@ model Part {
   id           String  @id @default(cuid())
   sku          String  @unique
   name         String
-  category     String  @default("SPARE") // LOUVRE | FIXING | MOTOR | LED | BLIND | GASKET | SPARE
+  category     String  @default("SPARE") // LOUVRE | STRUCTURE | FIXING | MOTOR | LED | BLIND | GASKET | SPARE
   stockQty     Int     @default(0)
   reorderLevel Int     @default(5)
-  unitCost     Float   @default(0)
+  reorderQty   Int     @default(10) // how many to buy when it runs low
+  unitCost     Float   @default(0) // what we pay the supplier, ex VAT
+  unitPrice    Float   @default(0) // what a customer pays for a spare, ex VAT
+  supplier     String?
+  leadTimeDays Int     @default(14)
   location     String? // warehouse bay
+  notes        String?
+  isActive     Boolean @default(true)
 
-  lines PartRequestLine[]
+  lines           PartRequestLine[]
+  bomLines        BomLine[]
+  partsOrderLines PartsOrderLine[]
+  purchaseLines   PurchaseOrderLine[]
+  stockMoves      StockMove[]
 
   @@index([category])
+}
+
+/// Every change to a stock level, with who and why. Stock is only ever moved
+/// through this ledger, so the number on the shelf can always be explained.
+model StockMove {
+  id     String @id @default(cuid())
+  partId String
+  part   Part   @relation(fields: [partId], references: [id], onDelete: Cascade)
+
+  change  Int // +5 received, -2 picked
+  balance Int // stock level after the move
+  // PICKED | RECEIVED | RETURNED | ADJUSTMENT | STOCK_TAKE
+  reason  String
+  note    String?
+  ref     String? // DSP-3081, PUR-1004 — the record that caused it
+
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@index([partId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Products and bills of materials
+// ---------------------------------------------------------------------------
+
+/// A pergola we sell. Its bill of materials is the list of parts that make one
+/// up — what an agent works from when a customer rings about a missing piece.
+model Product {
+  id          String   @id @default(cuid())
+  code        String   @unique // HP-PG-4X3
+  name        String
+  sizeSpec    String? // "4m x 3m, freestanding"
+  description String?
+  basePrice   Float    @default(0) // selling price, inc VAT
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  bom    BomLine[]
+  orders Order[]
+}
+
+model BomLine {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  partId    String
+  part      Part    @relation(fields: [partId], references: [id])
+  qty       Int     @default(1)
+  note      String?
+
+  @@unique([productId, partId])
+  @@index([partId])
+}
+
+// ---------------------------------------------------------------------------
+// Parts orders — priced orders for spare parts, which generate the dispatch
+// ---------------------------------------------------------------------------
+
+model PartsOrder {
+  id  String @id @default(cuid())
+  ref String @unique // SP-5012
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  orderId    String?
+  order      Order?   @relation(fields: [orderId], references: [id])
+  ticketId   String?
+  ticket     Ticket?  @relation(fields: [ticketId], references: [id])
+
+  createdById String
+  createdBy   User   @relation("PartsOrderCreator", fields: [createdById], references: [id])
+
+  // CHARGEABLE | WARRANTY | GOODWILL
+  billing       String  @default("CHARGEABLE")
+  // AWAITING | PAID | NOT_REQUIRED
+  paymentStatus String  @default("AWAITING")
+  paymentRef    String?
+  // PLACED | CANCELLED — fulfilment is tracked on the dispatch it generated
+  status        String  @default("PLACED")
+
+  // Money, all in GBP. Lines are priced ex VAT; VAT is added once at the end.
+  listValue      Float @default(0) // the parts at list price, whatever the billing
+  subtotal       Float @default(0)
+  discount       Float @default(0)
+  deliveryCharge Float @default(0)
+  vatRate        Float @default(0.2)
+  vat            Float @default(0)
+  total          Float @default(0)
+
+  shipToName  String?
+  shipToLine1 String?
+  shipToLine2 String?
+  shipToCity  String?
+  shipToPost  String?
+
+  customerNote String? // printed on the order confirmation
+  internalNote String? // for the team only
+
+  placedAt    DateTime  @default(now())
+  paidAt      DateTime?
+  cancelledAt DateTime?
+
+  dispatchId String?      @unique
+  dispatch   PartRequest? @relation(fields: [dispatchId], references: [id])
+
+  lines      PartsOrderLine[]
+  activities Activity[]
+
+  @@index([customerId])
+  @@index([paymentStatus])
+  @@index([placedAt])
+}
+
+model PartsOrderLine {
+  id           String     @id @default(cuid())
+  partsOrderId String
+  partsOrder   PartsOrder @relation(fields: [partsOrderId], references: [id], onDelete: Cascade)
+  partId       String
+  part         Part       @relation(fields: [partId], references: [id])
+  // Snapshotted, so a later price or name change never rewrites an order.
+  sku          String
+  description  String
+  qty          Int        @default(1)
+  unitPrice    Float      @default(0)
+  lineTotal    Float      @default(0)
+
+  @@index([partsOrderId])
+}
+
+// ---------------------------------------------------------------------------
+// Purchasing — buying stock back in from suppliers
+// ---------------------------------------------------------------------------
+
+model PurchaseOrder {
+  id       String  @id @default(cuid())
+  ref      String  @unique // PUR-1004
+  supplier String
+  // DRAFT | SENT | RECEIVED | CANCELLED
+  status   String  @default("DRAFT")
+  notes    String?
+  total    Float   @default(0)
+
+  createdById String
+  createdBy   User      @relation("PurchaseOrderCreator", fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now())
+  sentAt      DateTime?
+  expectedAt  DateTime?
+  receivedAt  DateTime?
+
+  lines PurchaseOrderLine[]
+
+  @@index([status])
+}
+
+model PurchaseOrderLine {
+  id              String        @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  partId          String
+  part            Part          @relation(fields: [partId], references: [id])
+  qty             Int           @default(1)
+  unitCost        Float         @default(0)
+
+  @@index([purchaseOrderId])
 }
 
 model PartRequest {
@@ -259,12 +475,16 @@ model PartRequest {
 
   requestedAt  DateTime  @default(now())
   dueAt        DateTime?
+  // When the stock came off the shelf. Set once, so a dispatch that goes back
+  // to "short on stock" and is picked again never takes the stock twice.
+  pickedAt     DateTime?
   dispatchedAt DateTime?
   deliveredAt  DateTime?
   notes        String?
 
   lines      PartRequestLine[]
   activities Activity[]
+  partsOrder PartsOrder?
 
   @@index([status])
   @@index([dueAt])
@@ -339,15 +559,26 @@ model Activity {
   order         Order?       @relation(fields: [orderId], references: [id])
   partRequestId String?
   partRequest   PartRequest? @relation(fields: [partRequestId], references: [id])
+  partsOrderId  String?
+  partsOrder    PartsOrder?  @relation(fields: [partsOrderId], references: [id])
 
   // Where it came from, so records stay traceable to the source system.
   sourceSystem String? // AIRCALL | TAWK | EMAIL | CRM | SLACK
   sourceRef    String? // external id from that system
   durationSec  Int?
+  // How a call or chat ended: ANSWERED | MISSED | VOICEMAIL. Missed contacts
+  // carry no userId — nobody picked them up — which is what the answer rate
+  // on the channel report is built from.
+  outcome      String?
+  // How long the customer waited for a person: queue time on a call or chat,
+  // time to reply on an email.
+  waitSec      Int?
 
   occurredAt DateTime @default(now())
 
   @@index([customerId, occurredAt])
   @@index([ticketId, occurredAt])
-  @@index([type])
+  @@index([orderId, occurredAt])
+  @@index([type, occurredAt])
+  @@index([userId, occurredAt])
 }

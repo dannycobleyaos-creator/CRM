@@ -76,7 +76,10 @@ export default async function CaseDetailPage({ params }: { params: Promise<{ id:
         },
         partRequests: {
           orderBy: { requestedAt: 'desc' },
-          include: { lines: { include: { part: true } } },
+          include: {
+            lines: { include: { part: true } },
+            partsOrder: { select: { id: true, ref: true, billing: true } },
+          },
         },
       },
     }),
@@ -211,7 +214,7 @@ export default async function CaseDetailPage({ params }: { params: Promise<{ id:
         </CardBody>
       </Card>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <div className="space-y-6">
           <Card>
             <CardHeader
@@ -309,7 +312,15 @@ export default async function CaseDetailPage({ params }: { params: Promise<{ id:
 
           {ticket.order && (
             <Card>
-              <CardHeader eyebrow="Linked order" title={ticket.order.ref} />
+              <CardHeader
+                eyebrow="Linked order"
+                title={ticket.order.ref}
+                action={
+                  <Link href={`/orders/${ticket.order.id}`} className="text-2xs text-slate hover:text-ink">
+                    Open order
+                  </Link>
+                }
+              />
               <CardBody>
                 <dl className="divide-y divide-stone/60">
                   <Fact label="Product">
@@ -347,14 +358,36 @@ export default async function CaseDetailPage({ params }: { params: Promise<{ id:
             </Card>
           )}
 
-          {ticket.partRequests.length > 0 && (
+          {(isOpen || ticket.partRequests.length > 0) && (
             <Card>
-              <CardHeader eyebrow="Warehouse" title="Parts raised from this case" />
+              <CardHeader
+                eyebrow="Warehouse"
+                title="Parts for this case"
+                action={
+                  <Link
+                    href={`/parts-orders/new?customerId=${ticket.customerId}&ticketId=${ticket.id}${ticket.orderId ? `&orderId=${ticket.orderId}` : ''}`}
+                    className="inline-flex items-center gap-1.5 rounded-brand bg-ember px-2.5 py-1.5 text-2xs font-medium text-white transition-colors hover:bg-ember-dark"
+                  >
+                    Order parts
+                  </Link>
+                }
+              />
+              {ticket.partRequests.length === 0 && (
+                <p className="px-5 py-4 text-2xs text-slate">
+                  Nothing sent yet. Parts ordered from here are linked to this case and its order.
+                </p>
+              )}
               <ul className="divide-y divide-stone/60">
                 {ticket.partRequests.map((r) => (
                   <li key={r.id} className="px-5 py-3">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-2xs text-slate">{r.ref}</span>
+                      {r.partsOrder ? (
+                        <Link href={`/parts-orders/${r.partsOrder.id}`} className="font-mono text-2xs text-slate hover:text-ember-dark">
+                          {r.partsOrder.ref} · {r.ref}
+                        </Link>
+                      ) : (
+                        <span className="font-mono text-2xs text-slate">{r.ref}</span>
+                      )}
                       <DispatchStatusChip value={r.status} />
                     </div>
                     <ul className="mt-1.5 space-y-0.5 text-2xs text-slate">

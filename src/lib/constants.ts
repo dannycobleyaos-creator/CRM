@@ -124,6 +124,34 @@ export const PERGOLA_COLOUR_META: Record<PergolaColour, { label: string; swatch:
   MATT_WHITE: { label: 'Matt white', swatch: '#F3F1ED' },
 };
 
+/** Order statuses where the order is still being worked towards installation. */
+export const ORDER_ACTIVE_STATUSES: OrderStatus[] = [
+  'DEPOSIT_PAID',
+  'IN_PRODUCTION',
+  'READY',
+  'SCHEDULED',
+  'DELIVERED',
+];
+
+export const ORDER_DATE_KINDS = [
+  'SURVEY',
+  'DELIVERY',
+  'INSTALL',
+  'PAYMENT',
+  'FOLLOW_UP',
+  'OTHER',
+] as const;
+export type OrderDateKind = (typeof ORDER_DATE_KINDS)[number];
+
+export const ORDER_DATE_META: StatusMeta<OrderDateKind> = {
+  SURVEY: { label: 'Site survey', tone: 'slate' },
+  DELIVERY: { label: 'Delivery', tone: 'sky' },
+  INSTALL: { label: 'Installation', tone: 'ember' },
+  PAYMENT: { label: 'Payment due', tone: 'amber' },
+  FOLLOW_UP: { label: 'Follow-up', tone: 'moss' },
+  OTHER: { label: 'Other', tone: 'anthracite' },
+};
+
 /* -------------------------------------------------------------------------- */
 /* Cases                                                                      */
 /* -------------------------------------------------------------------------- */
@@ -326,8 +354,13 @@ export const DISPATCH_BOARD_COLUMNS: DispatchStatus[] = [
 
 export const CARRIERS = ['DPD', 'Royal Mail', 'Palletways', 'Parcelforce', 'Own van'] as const;
 
+/* -------------------------------------------------------------------------- */
+/* Inventory                                                                  */
+/* -------------------------------------------------------------------------- */
+
 export const PART_CATEGORIES = [
   'LOUVRE',
+  'STRUCTURE',
   'FIXING',
   'MOTOR',
   'LED',
@@ -336,6 +369,94 @@ export const PART_CATEGORIES = [
   'SPARE',
 ] as const;
 export type PartCategory = (typeof PART_CATEGORIES)[number];
+
+/** Catalogue order — the way a pergola goes together, not the alphabet. */
+export const partCategoryRank = (category: string) => {
+  const i = (PART_CATEGORIES as readonly string[]).indexOf(category);
+  return i === -1 ? PART_CATEGORIES.length : i;
+};
+
+export const byCatalogueOrder = <T extends { category: string; name: string }>(a: T, b: T) =>
+  partCategoryRank(a.category) - partCategoryRank(b.category) || a.name.localeCompare(b.name);
+
+export const PART_CATEGORY_META: StatusMeta<PartCategory> = {
+  LOUVRE: { label: 'Louvres', tone: 'anthracite' },
+  STRUCTURE: { label: 'Posts & beams', tone: 'slate' },
+  FIXING: { label: 'Fixings', tone: 'slate' },
+  MOTOR: { label: 'Motors & control', tone: 'sky' },
+  LED: { label: 'Lighting', tone: 'amber' },
+  BLIND: { label: 'Blinds', tone: 'moss' },
+  GASKET: { label: 'Seals & gaskets', tone: 'slate' },
+  SPARE: { label: 'Other spares', tone: 'slate' },
+};
+
+export const STOCK_MOVE_REASONS = [
+  'PICKED',
+  'RECEIVED',
+  'RETURNED',
+  'ADJUSTMENT',
+  'STOCK_TAKE',
+] as const;
+export type StockMoveReason = (typeof STOCK_MOVE_REASONS)[number];
+
+export const STOCK_MOVE_META: StatusMeta<StockMoveReason> = {
+  PICKED: { label: 'Picked for dispatch', tone: 'ember' },
+  RECEIVED: { label: 'Received from supplier', tone: 'moss' },
+  RETURNED: { label: 'Returned to shelf', tone: 'sky' },
+  ADJUSTMENT: { label: 'Manual adjustment', tone: 'amber' },
+  STOCK_TAKE: { label: 'Stock take', tone: 'slate' },
+};
+
+/** Reasons a person can pick when correcting stock by hand. */
+export const MANUAL_STOCK_REASONS: StockMoveReason[] = ['ADJUSTMENT', 'STOCK_TAKE', 'RETURNED'];
+
+/* -------------------------------------------------------------------------- */
+/* Parts orders — priced orders that generate a dispatch                      */
+/* -------------------------------------------------------------------------- */
+
+/** UK standard rate. Parts are priced ex VAT; VAT is added once, at the end. */
+export const VAT_RATE = 0.2;
+
+/** Standard courier charge for a parcel of spares, ex VAT. Editable per order. */
+export const DEFAULT_PARTS_DELIVERY = 9.95;
+
+export const BILLING_TYPES = ['CHARGEABLE', 'WARRANTY', 'GOODWILL'] as const;
+export type BillingType = (typeof BILLING_TYPES)[number];
+
+export const BILLING_META: StatusMeta<BillingType> = {
+  CHARGEABLE: { label: 'Chargeable', tone: 'ember', hint: 'The customer pays for these parts' },
+  WARRANTY: { label: 'Warranty', tone: 'sky', hint: 'No charge — covered by the warranty' },
+  GOODWILL: { label: 'Goodwill', tone: 'moss', hint: 'No charge — agreed as a gesture' },
+};
+
+export const PAYMENT_STATUSES = ['AWAITING', 'PAID', 'NOT_REQUIRED'] as const;
+export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
+
+export const PAYMENT_STATUS_META: StatusMeta<PaymentStatus> = {
+  AWAITING: { label: 'Awaiting payment', tone: 'amber', hint: 'Will not be picked until paid' },
+  PAID: { label: 'Paid', tone: 'moss' },
+  NOT_REQUIRED: { label: 'No charge', tone: 'slate' },
+};
+
+export const PARTS_ORDER_STATUSES = ['PLACED', 'CANCELLED'] as const;
+export type PartsOrderStatus = (typeof PARTS_ORDER_STATUSES)[number];
+
+/* -------------------------------------------------------------------------- */
+/* Purchasing                                                                 */
+/* -------------------------------------------------------------------------- */
+
+export const PURCHASE_ORDER_STATUSES = ['DRAFT', 'SENT', 'RECEIVED', 'CANCELLED'] as const;
+export type PurchaseOrderStatus = (typeof PURCHASE_ORDER_STATUSES)[number];
+
+export const PURCHASE_ORDER_STATUS_META: StatusMeta<PurchaseOrderStatus> = {
+  DRAFT: { label: 'Draft', tone: 'slate', hint: 'Not yet sent to the supplier' },
+  SENT: { label: 'On order', tone: 'sky', hint: 'Sent — waiting for delivery' },
+  RECEIVED: { label: 'Received', tone: 'moss', hint: 'Booked into stock' },
+  CANCELLED: { label: 'Cancelled', tone: 'clay' },
+};
+
+/** Purchase orders still expected to bring stock in. */
+export const PURCHASE_OPEN_STATUSES: PurchaseOrderStatus[] = ['DRAFT', 'SENT'];
 
 /* -------------------------------------------------------------------------- */
 /* Announcements                                                              */
@@ -388,3 +509,20 @@ export const ACTIVITY_TYPE_META: StatusMeta<ActivityType> = {
 };
 
 export const SOURCE_SYSTEMS = ['AIRCALL', 'TAWK', 'EMAIL', 'CRM', 'SLACK'] as const;
+
+/** How a call or chat ended. Missed contacts are the ones nobody picked up. */
+export const CONTACT_OUTCOMES = ['ANSWERED', 'MISSED', 'VOICEMAIL'] as const;
+export type ContactOutcome = (typeof CONTACT_OUTCOMES)[number];
+
+/**
+ * The three conversation channels the contact report counts, in a fixed order
+ * so each one keeps its colour on every chart and in every legend.
+ */
+export const CONTACT_CHANNELS = ['CALL', 'CHAT', 'EMAIL'] as const;
+export type ContactChannel = (typeof CONTACT_CHANNELS)[number];
+
+export const CONTACT_CHANNEL_META: Record<ContactChannel, { label: string; plural: string }> = {
+  CALL: { label: 'Call', plural: 'Calls' },
+  CHAT: { label: 'Live chat', plural: 'Live chats' },
+  EMAIL: { label: 'Email', plural: 'Emails' },
+};

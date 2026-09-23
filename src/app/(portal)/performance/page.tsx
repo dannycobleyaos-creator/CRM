@@ -4,7 +4,7 @@ import { AlarmClock, CheckCircle2, Gauge, Inbox, Smile, Timer } from 'lucide-rea
 import { requireManagement } from '@/lib/auth';
 import { getAgentMetrics, getCaseMix, getDailyFlow, getTeamTotals } from '@/lib/metrics';
 import { TEAMS } from '@/lib/constants';
-import { formatDuration } from '@/lib/utils';
+import { formatDuration, formatTalkTime } from '@/lib/utils';
 
 import { Card, CardBody, CardHeader } from '@/components/ui/card';
 import { PageHeader } from '@/components/ui/page-header';
@@ -14,6 +14,7 @@ import { Avatar } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { RoleChip } from '@/components/status-chips';
 import { FlowChart } from '@/components/charts/flow-chart';
+import { PerformanceNav } from '@/components/performance-nav';
 import { BarList } from '@/components/charts/bar-list';
 import { Meter } from '@/components/charts/meter';
 
@@ -60,6 +61,8 @@ export default async function PerformancePage({
         title="Performance"
         description="Output, responsiveness and workload — built from work people already do in the portal, so nobody has to fill in a timesheet for it to be true."
       />
+
+      <PerformanceNav active="overview" period={period} />
 
       {/* One filter row, scoping everything below it */}
       <div className="flex flex-wrap items-center gap-3">
@@ -114,7 +117,7 @@ export default async function PerformancePage({
         />
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <Card>
           <CardHeader
             eyebrow={label}
@@ -169,7 +172,7 @@ export default async function PerformancePage({
         </Card>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader
             eyebrow={label}
@@ -262,7 +265,7 @@ export default async function PerformancePage({
                     {a.csat === null ? '—' : a.csat}
                   </td>
                   <td className="hidden xl:table-cell text-sm tabular-nums text-slate">
-                    {a.loggedCallMinutes ? formatDuration(a.loggedCallMinutes) : '—'}
+                    {a.loggedCallMinutes ? formatTalkTime(a.loggedCallMinutes * 60) : '—'}
                   </td>
                 </tr>
               ))}

@@ -28,7 +28,7 @@ export function GlobalSearch({ defaultValue = '' }: { defaultValue?: string }) {
         name="q"
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        placeholder="Search customers, cases, orders, dispatches…"
+        placeholder="Search customers, cases, orders, parts…"
         aria-label="Search the portal"
         className="field h-10 pl-9"
       />

@@ -16,9 +16,9 @@ const HIGHLIGHTS = [
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ next?: string }>;
+  searchParams: Promise<{ next?: string; ended?: string }>;
 }) {
-  const { next } = await searchParams;
+  const { next, ended } = await searchParams;
 
   return (
     <main className="grid min-h-screen lg:grid-cols-[1.05fr_1fr]">
@@ -72,6 +72,11 @@ export default async function LoginPage({
           <p className="mt-2 text-sm text-slate">
             Use the work email address your account was set up with.
           </p>
+          {ended && (
+            <p role="status" className="mt-4 rounded-brand border border-amber/40 bg-amber-soft px-3 py-2 text-xs text-amber">
+              Your session has ended. Sign in again — and if your account has been switched off, ask a manager.
+            </p>
+          )}
 
           <div className="mt-7">
             <LoginForm next={next} />

@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, Mail, MapPin, Phone, Truck } from 'lucide-react';
+import { ArrowLeft, ClipboardPlus, Mail, MapPin, Phone, ShoppingCart, Truck } from 'lucide-react';
 
 import { requireUser } from '@/lib/auth';
 import { db } from '@/lib/db';
@@ -12,18 +12,21 @@ import {
   PERGOLA_COLOUR_META,
   type PergolaColour,
 } from '@/lib/constants';
-import { formatDate, formatMoney, parseTags, relativeTime } from '@/lib/utils';
+import { formatDate, formatMoney, formatPrice, parseTags, relativeTime } from '@/lib/utils';
 
 import { ActionForm } from '@/components/ui/action-form';
+import { ButtonLink } from '@/components/ui/button';
 import { Card, CardBody, CardHeader, EmptyState } from '@/components/ui/card';
 import { PageHeader } from '@/components/ui/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Avatar } from '@/components/ui/avatar';
 import { Stat } from '@/components/ui/stat';
 import {
+  BillingChip,
   CustomerStageChip,
   DispatchStatusChip,
   OrderStatusChip,
+  PaymentChip,
   PriorityChip,
   SlaChip,
   SourceChip,
@@ -57,7 +60,17 @@ export default async function CustomerDetailPage({
     where: { id },
     include: {
       owner: { select: { name: true, avatarTone: true, jobTitle: true } },
-      orders: { orderBy: { orderedAt: 'desc' } },
+      orders: {
+        orderBy: { orderedAt: 'desc' },
+        include: {
+          keyDates: {
+            where: { doneAt: null },
+            orderBy: { dueAt: 'asc' },
+            take: 1,
+            select: { label: true, dueAt: true },
+          },
+        },
+      },
       tickets: {
         orderBy: { openedAt: 'desc' },
         include: { assignee: { select: { name: true, avatarTone: true } } },
@@ -66,9 +79,12 @@ export default async function CustomerDetailPage({
         orderBy: { createdAt: 'desc' },
         include: { assignee: { select: { name: true, avatarTone: true } } },
       },
-      partRequests: {
-        orderBy: { requestedAt: 'desc' },
-        include: { lines: { include: { part: true } } },
+      partsOrders: {
+        orderBy: { placedAt: 'desc' },
+        include: {
+          lines: { select: { id: true, qty: true, description: true } },
+          dispatch: { select: { status: true, carrier: true, trackingRef: true } },
+        },
       },
       activities: { select: timelineSelect, orderBy: { occurredAt: 'desc' }, take: 80 },
     },
@@ -102,6 +118,11 @@ export default async function CustomerDetailPage({
         title={customer.name}
         description={address || undefined}
         actions={
+          <>
+          <ButtonLink href={`/parts-orders/new?customerId=${customer.id}`} variant="secondary" size="sm" className="h-9">
+            <ShoppingCart className="h-4 w-4" />
+            Order parts
+          </ButtonLink>
           <ActionForm
             action={setCustomerStage}
             fields={{ customerId: customer.id }}
@@ -131,6 +152,7 @@ export default async function CustomerDetailPage({
               Update
             </button>
           </ActionForm>
+          </>
         }
       />
 
@@ -157,7 +179,7 @@ export default async function CustomerDetailPage({
         <Stat label="Interactions" value={customer.activities.length} sub="Logged on this record" tone="sky" />
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
         {/* Facts and related records */}
         <div className="space-y-6">
           <Card>
@@ -190,16 +212,29 @@ export default async function CustomerDetailPage({
           </Card>
 
           <Card>
-            <CardHeader eyebrow={`${customer.orders.length} total`} title="Orders" />
+            <CardHeader
+              eyebrow={`${customer.orders.length} total`}
+              title="Orders"
+              action={
+                <ButtonLink href={`/orders?new=1&customerId=${customer.id}`} variant="ghost" size="sm">
+                  <ClipboardPlus className="h-3.5 w-3.5" />
+                  New order
+                </ButtonLink>
+              }
+            />
             {customer.orders.length ? (
               <ul className="divide-y divide-stone/60">
                 {customer.orders.map((o) => (
                   <li key={o.id} className="px-5 py-3.5">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-2xs text-slate">{o.ref}</span>
+                      <Link href={`/orders/${o.id}`} className="font-mono text-2xs text-slate hover:text-ember-dark">
+                        {o.ref}
+                      </Link>
                       <OrderStatusChip value={o.status} />
                     </div>
-                    <p className="mt-1 text-sm font-medium text-ink">{o.productLine}</p>
+                    <Link href={`/orders/${o.id}`} className="mt-1 block text-sm font-medium text-ink hover:text-ember-dark">
+                      {o.productLine}
+                    </Link>
                     <p className="mt-0.5 text-2xs text-slate">
                       {o.sizeSpec} · {o.extras}
                     </p>
@@ -219,6 +254,11 @@ export default async function CustomerDetailPage({
                       {o.deliveryDue && <span>Delivery {formatDate(o.deliveryDue)}</span>}
                       {o.installedAt && <span className="text-moss">Installed {formatDate(o.installedAt)}</span>}
                     </div>
+                    {o.keyDates[0] && (
+                      <p className={`mt-1.5 text-2xs ${o.keyDates[0].dueAt < new Date() ? 'text-clay' : 'text-slate'}`}>
+                        Next: {o.keyDates[0].label} · {formatDate(o.keyDates[0].dueAt)} ({relativeTime(o.keyDates[0].dueAt)})
+                      </p>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -228,33 +268,55 @@ export default async function CustomerDetailPage({
           </Card>
 
           <Card>
-            <CardHeader eyebrow={`${customer.partRequests.length} total`} title="Parts sent out" />
-            {customer.partRequests.length ? (
+            <CardHeader
+              eyebrow={`${customer.partsOrders.length} total`}
+              title="Parts orders"
+              action={
+                <ButtonLink href={`/parts-orders/new?customerId=${customer.id}`} variant="ghost" size="sm">
+                  <ShoppingCart className="h-3.5 w-3.5" />
+                  Order parts
+                </ButtonLink>
+              }
+            />
+            {customer.partsOrders.length ? (
               <ul className="divide-y divide-stone/60">
-                {customer.partRequests.map((r) => (
-                  <li key={r.id} className="px-5 py-3.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-2xs text-slate">{r.ref}</span>
-                      <DispatchStatusChip value={r.status} />
-                    </div>
-                    <ul className="mt-1.5 space-y-0.5 text-2xs text-slate">
-                      {r.lines.map((l) => (
-                        <li key={l.id}>
-                          {l.qty} × {l.part.name}
-                        </li>
-                      ))}
-                    </ul>
-                    {r.trackingRef && (
+                {customer.partsOrders.map((p) => (
+                  <li key={p.id} className="px-5 py-3.5">
+                    <Link href={`/parts-orders/${p.id}`} className="group block">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-2xs text-slate group-hover:text-ember-dark">{p.ref}</span>
+                        <BillingChip value={p.billing} dot={false} />
+                        {p.status === 'CANCELLED' ? (
+                          <span className="text-2xs text-clay">Cancelled</span>
+                        ) : (
+                          <>
+                            {p.paymentStatus === 'AWAITING' && <PaymentChip value="AWAITING" />}
+                            {p.dispatch && <DispatchStatusChip value={p.dispatch.status} />}
+                          </>
+                        )}
+                        <span className="ml-auto text-xs tabular-nums text-ink">
+                          {p.billing === 'CHARGEABLE' ? formatPrice(p.total) : 'No charge'}
+                        </span>
+                      </div>
+                      <ul className="mt-1.5 space-y-0.5 text-2xs text-slate">
+                        {p.lines.map((l) => (
+                          <li key={l.id}>
+                            {l.qty} × {l.description}
+                          </li>
+                        ))}
+                      </ul>
+                    </Link>
+                    {p.dispatch?.trackingRef && (
                       <p className="mt-1.5 inline-flex items-center gap-1.5 text-2xs text-moss">
                         <Truck className="h-3 w-3" />
-                        {r.carrier} · {r.trackingRef}
+                        {p.dispatch.carrier} · {p.dispatch.trackingRef}
                       </p>
                     )}
                   </li>
                 ))}
               </ul>
             ) : (
-              <EmptyState title="Nothing dispatched" description="No parts have been sent to this address." />
+              <EmptyState title="No parts ordered" description="Nothing has been ordered for this customer." />
             )}
           </Card>
         </div>

@@ -1,20 +1,34 @@
+import type { ContactChannel } from './constants';
+
 /**
  * Chart palette.
  *
  * The brand's UI colours are deliberately muted, which is right for chrome and
  * wrong for data marks — several of them fall below the chroma floor and read as
- * grey next to each other. These are brand-adjacent steps chosen so the pair
- * passes the categorical checks on a white card surface:
+ * grey next to each other. These are brand-adjacent steps chosen so the set
+ * passes the categorical checks on a white card surface, all pairs compared
+ * (lines cross, so adjacency is not enough):
  *
- *   node scripts/validate_palette.js "#C0762F,#0F76A8" --mode light
- *   Lightness PASS · Chroma PASS · CVD ΔE 19.2 PASS · Normal ΔE 25.8 PASS · Contrast PASS
+ *   node scripts/validate_palette.js "#0F76A8,#C0762F,#1F9E78" \
+ *     --mode light --surface "#FFFFFF" --pairs all
+ *   Lightness PASS · Chroma PASS · CVD ΔE 9.7 PASS · Normal ΔE 16.1 PASS · Contrast PASS
  *
  * Series colour follows the entity, never its rank. Slot order is fixed.
  */
-export const CHART_SERIES = ['#C0762F', '#0F76A8'] as const;
+export const CHART_SERIES = ['#C0762F', '#0F76A8', '#1F9E78'] as const;
 
 /** Single-series marks: one colour for every bar, never a value ramp. */
 export const CHART_PRIMARY = CHART_SERIES[0];
+
+/**
+ * Each conversation channel owns one colour everywhere it is charted — calls
+ * blue and chats ember, matching their chips, emails the third slot.
+ */
+export const CHANNEL_COLOURS: Record<ContactChannel, string> = {
+  CALL: CHART_SERIES[1],
+  CHAT: CHART_SERIES[0],
+  EMAIL: CHART_SERIES[2],
+};
 
 export const CHART_INK = {
   primary: '#1C2022',

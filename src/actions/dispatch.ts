@@ -5,7 +5,8 @@ import { z } from 'zod';
 
 import { db } from '@/lib/db';
 import { isManagement, requireUser } from '@/lib/auth';
-import { DISPATCH_STATUSES, PRIORITIES } from '@/lib/constants';
+import { DISPATCH_STATUSES } from '@/lib/constants';
+import { describeShortfalls, findShortfalls, pickLines, returnLines } from '@/lib/stock';
 import { formString } from '@/lib/utils';
 
 /** Carries back what was typed — React clears the form when the action settles. */
@@ -15,104 +16,6 @@ export type ActionState = {
   values?: Record<string, string>;
 };
 
-const createSchema = z.object({
-  customerId: z.string().min(1, 'Pick the customer these parts are going to'),
-  ticketId: z.string().optional(),
-  priority: z.enum(PRIORITIES).default('NORMAL'),
-  reason: z.string().min(5, 'Say why the parts are going out — this is the audit trail'),
-  dueAt: z.string().optional(),
-  notes: z.string().optional(),
-  partIds: z.array(z.string()).min(1, 'Add at least one part'),
-  quantities: z.array(z.number().int().min(1)),
-});
-
-export async function createPartRequest(
-  _prev: ActionState,
-  formData: FormData,
-): Promise<ActionState> {
-  const user = await requireUser();
-
-  const partIds = formData.getAll('partId').map(String).filter(Boolean);
-  const quantities = partIds.map((id) => Number(formData.get(`qty_${id}`) ?? 1) || 1);
-
-  const submitted = {
-    customerId: formString(formData, 'customerId') ?? '',
-    priority: formString(formData, 'priority') ?? 'NORMAL',
-    reason: formString(formData, 'reason') ?? '',
-    dueAt: formString(formData, 'dueAt') ?? '',
-    notes: formString(formData, 'notes') ?? '',
-  };
-
-  const parsed = createSchema.safeParse({
-    ...submitted,
-    ticketId: formString(formData, 'ticketId'),
-    dueAt: formString(formData, 'dueAt'),
-    notes: formString(formData, 'notes'),
-    partIds,
-    quantities,
-  });
-
-  if (!parsed.success) {
-    return {
-      error: parsed.error.issues[0]?.message ?? 'Check the form and try again',
-      values: submitted,
-    };
-  }
-
-  const data = parsed.data;
-  const customer = await db.customer.findUnique({ where: { id: data.customerId } });
-  if (!customer) return { error: 'That customer no longer exists', values: submitted };
-
-  const lastRef = await db.partRequest.findFirst({
-    orderBy: { ref: 'desc' },
-    where: { ref: { startsWith: 'DSP-' } },
-    select: { ref: true },
-  });
-  const nextNumber = (Number(lastRef?.ref.replace('DSP-', '')) || 3000) + 1;
-
-  const request = await db.partRequest.create({
-    data: {
-      ref: `DSP-${nextNumber}`,
-      customerId: customer.id,
-      ticketId: data.ticketId ?? null,
-      requestedById: user.id,
-      status: 'REQUESTED',
-      priority: data.priority,
-      reason: data.reason,
-      notes: data.notes ?? null,
-      dueAt: data.dueAt ? new Date(data.dueAt) : null,
-      // Ship to the address already on the customer record — no re-keying.
-      shipToName: customer.name,
-      shipToLine1: customer.addressL1,
-      shipToCity: customer.city,
-      shipToPost: customer.postcode,
-      lines: {
-        create: data.partIds.map((partId, i) => ({
-          partId,
-          qty: data.quantities[i] ?? 1,
-        })),
-      },
-    },
-  });
-
-  await db.activity.create({
-    data: {
-      type: 'DISPATCH',
-      summary: `Parts requested (${request.ref}) by ${user.name}`,
-      body: data.reason,
-      customerId: customer.id,
-      ticketId: data.ticketId ?? null,
-      partRequestId: request.id,
-      userId: user.id,
-      sourceSystem: 'CRM',
-    },
-  });
-
-  revalidatePath('/dispatch');
-  revalidatePath(`/customers/${customer.id}`);
-  return { ok: true };
-}
-
 const advanceSchema = z.object({
   requestId: z.string().min(1),
   status: z.enum(DISPATCH_STATUSES),
@@ -120,10 +23,17 @@ const advanceSchema = z.object({
   trackingRef: z.string().optional(),
 });
 
+/** Once a parcel has left, the only way forward is delivered. */
+const LEFT_THE_BUILDING = ['DISPATCHED', 'DELIVERED'];
+
 /**
- * Moving a dispatch forward. Stock comes off the shelf at the moment it is
- * picked, and dispatch details are required before anything can be marked as
- * sent — no more "I think it went out last week".
+ * Moving a dispatch forward. Stock comes off the shelf once — the first time
+ * the dispatch is picked or sent — and goes back if it is cancelled after that.
+ * Dispatch details are required before anything can be marked as sent, so
+ * there is no more "I think it went out last week".
+ *
+ * New dispatches are only ever created by placing a parts order, which is what
+ * prices them; see `src/actions/parts-orders.ts`.
  */
 export async function advanceDispatch(
   _prev: ActionState,
@@ -142,54 +52,100 @@ export async function advanceDispatch(
   const { requestId, status, carrier, trackingRef } = parsed.data;
   const request = await db.partRequest.findUnique({
     where: { id: requestId },
-    include: { lines: true },
+    include: { lines: true, partsOrder: true },
   });
   if (!request) return { error: 'That dispatch no longer exists' };
 
+  if (request.status === status) return { ok: true };
+  if (LEFT_THE_BUILDING.includes(request.status) && status !== 'DELIVERED') {
+    return { error: 'This parcel has already gone out — it can only be marked delivered now.' };
+  }
+  if (request.status === 'CANCELLED') {
+    return { error: 'This dispatch was cancelled. Place a new parts order if the parts are still needed.' };
+  }
+
   if (status === 'APPROVED' && !isManagement(user.role) && user.team !== 'Warehouse') {
     return { error: 'Only a team lead, manager or the warehouse can approve a dispatch.' };
+  }
+
+  // A paid-for order is released by its payment, not by a click in the queue.
+  const order = request.partsOrder;
+  if (
+    order?.billing === 'CHARGEABLE' &&
+    order.paymentStatus === 'AWAITING' &&
+    ['APPROVED', 'PICKING', 'DISPATCHED'].includes(status)
+  ) {
+    return {
+      error: `${order.ref} is awaiting payment. Mark it paid on the parts order and it will be released to the warehouse automatically.`,
+    };
   }
 
   if (status === 'DISPATCHED' && !(carrier && trackingRef)) {
     return { error: 'Add the carrier and tracking reference before marking it dispatched.' };
   }
 
-  // Stock leaves the shelf once, when picking starts.
-  if (status === 'PICKING' && request.status !== 'PICKING') {
-    for (const line of request.lines) {
-      await db.part.update({
-        where: { id: line.partId },
-        data: { stockQty: { decrement: line.qty } },
-      });
+  const takesStock = (status === 'PICKING' || status === 'DISPATCHED') && !request.pickedAt;
+  const givesStockBack = status === 'CANCELLED' && !!request.pickedAt;
+
+  if (takesStock) {
+    const short = await findShortfalls(db, request.lines);
+    if (short.length) {
+      return {
+        error: `Not enough on the shelf to pick: ${describeShortfalls(short)}. Mark it short on stock and raise a purchase order.`,
+      };
     }
   }
 
-  await db.partRequest.update({
-    where: { id: requestId },
-    data: {
-      status,
-      carrier: carrier ?? request.carrier,
-      trackingRef: trackingRef ?? request.trackingRef,
-      dispatchedAt: status === 'DISPATCHED' ? request.dispatchedAt ?? new Date() : request.dispatchedAt,
-      deliveredAt: status === 'DELIVERED' ? request.deliveredAt ?? new Date() : request.deliveredAt,
-    },
-  });
+  await db.$transaction(async (tx) => {
+    if (takesStock) await pickLines(tx, request.lines, { ref: request.ref, userId: user.id });
+    if (givesStockBack) await returnLines(tx, request.lines, { ref: request.ref, userId: user.id });
 
-  await db.activity.create({
-    data: {
-      type: 'DISPATCH',
-      summary: `${request.ref} — ${status.replace(/_/g, ' ').toLowerCase()} by ${user.name}`,
-      body: trackingRef ? `${carrier ?? 'Carrier'} tracking: ${trackingRef}` : null,
-      customerId: request.customerId,
-      ticketId: request.ticketId,
-      partRequestId: request.id,
-      userId: user.id,
-      sourceSystem: 'CRM',
-    },
+    await tx.partRequest.update({
+      where: { id: requestId },
+      data: {
+        status,
+        carrier: carrier ?? request.carrier,
+        trackingRef: trackingRef ?? request.trackingRef,
+        pickedAt: takesStock ? new Date() : givesStockBack ? null : request.pickedAt,
+        dispatchedAt: status === 'DISPATCHED' ? request.dispatchedAt ?? new Date() : request.dispatchedAt,
+        deliveredAt: status === 'DELIVERED' ? request.deliveredAt ?? new Date() : request.deliveredAt,
+      },
+    });
+
+    // A dispatch the warehouse rejects takes its order with it, so the agent
+    // who placed it sees the outcome on the order rather than a silent gap.
+    if (status === 'CANCELLED' && order && order.status !== 'CANCELLED') {
+      await tx.partsOrder.update({
+        where: { id: order.id },
+        data: { status: 'CANCELLED', cancelledAt: new Date() },
+      });
+    }
+
+    await tx.activity.create({
+      data: {
+        type: 'DISPATCH',
+        summary: `${request.ref} — ${status.replace(/_/g, ' ').toLowerCase()} by ${user.name}`,
+        body: trackingRef
+          ? `${carrier ?? 'Carrier'} tracking: ${trackingRef}`
+          : givesStockBack
+            ? 'Picked stock returned to the shelf.'
+            : null,
+        customerId: request.customerId,
+        ticketId: request.ticketId,
+        orderId: request.orderId,
+        partRequestId: request.id,
+        partsOrderId: order?.id ?? null,
+        userId: user.id,
+        sourceSystem: 'CRM',
+      },
+    });
   });
 
   revalidatePath('/dispatch');
+  revalidatePath('/inventory');
   revalidatePath(`/customers/${request.customerId}`);
   if (request.ticketId) revalidatePath(`/cases/${request.ticketId}`);
+  if (request.orderId) revalidatePath(`/orders/${request.orderId}`);
+  if (order) revalidatePath(`/parts-orders/${order.id}`);
   return { ok: true };
 }

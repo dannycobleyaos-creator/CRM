@@ -146,6 +146,19 @@
   );
 }
 
+/* Printing an order confirmation or purchase order prints the document only. */
+@media print {
+  @page {
+    margin: 14mm;
+  }
+  body {
+    background: #fff;
+  }
+  .card {
+    box-shadow: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

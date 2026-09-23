@@ -1,10 +1,13 @@
 import {
   BarChart3,
+  Boxes,
   Building2,
+  ClipboardList,
   LayoutDashboard,
   Megaphone,
   MessagesSquare,
   PackageCheck,
+  ShoppingCart,
   SquareKanban,
   Users,
 } from 'lucide-react';
@@ -14,7 +17,10 @@ export type NavKey =
   | 'cases'
   | 'board'
   | 'customers'
+  | 'orders'
+  | 'partsOrders'
   | 'dispatch'
+  | 'inventory'
   | 'announcements'
   | 'performance'
   | 'team';
@@ -25,7 +31,7 @@ export type NavItem = {
   label: string;
   icon: typeof LayoutDashboard;
   /** Badge counts the number of things waiting on somebody. */
-  countKey?: 'cases' | 'board' | 'dispatch' | 'announcements';
+  countKey?: 'cases' | 'board' | 'orders' | 'partsOrders' | 'dispatch' | 'inventory' | 'announcements';
   managementOnly?: boolean;
   description: string;
 };
@@ -70,12 +76,41 @@ export const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
         description: 'One record per customer with the full history',
       },
       {
+        key: 'orders',
+        href: '/orders',
+        label: 'Orders',
+        icon: ClipboardList,
+        countKey: 'orders',
+        description: 'Every pergola order with its key dates, notes and history',
+      },
+      {
+        key: 'partsOrders',
+        href: '/parts-orders',
+        label: 'Parts orders',
+        icon: ShoppingCart,
+        countKey: 'partsOrders',
+        description: 'Priced orders for spare parts — each one creates its dispatch',
+      },
+    ],
+  },
+  {
+    title: 'Warehouse',
+    items: [
+      {
         key: 'dispatch',
         href: '/dispatch',
         label: 'Parts dispatch',
         icon: PackageCheck,
         countKey: 'dispatch',
         description: 'Parts to send out, from request to doorstep',
+      },
+      {
+        key: 'inventory',
+        href: '/inventory',
+        label: 'Inventory',
+        icon: Boxes,
+        countKey: 'inventory',
+        description: 'Parts, prices, stock, bills of materials and purchasing',
       },
     ],
   },

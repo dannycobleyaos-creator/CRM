@@ -3,7 +3,9 @@
  *
  * Checks the paths that matter: signing in, role separation, moving work across
  * the board, raising a task, claiming a case, logging an interaction, search,
- * signing out, and moving a parts dispatch forward.
+ * signing out, moving a parts dispatch forward — and the order-to-shelf loop:
+ * pricing and placing a parts order, taking payment, picking it off the shelf,
+ * adding and ticking off an order's key date, and receiving a purchase order.
  *
  * Needs a running server and Playwright's Chromium:
  *
@@ -179,6 +181,11 @@ const surname = (await page.locator('a[href^="/customers/c"] span').first().text
 await page.goto(B + `/search?q=${encodeURIComponent(surname)}`, { waitUntil: 'load' });
 ok(`search finds "${surname}"`, (await page.locator('a[href^="/customers/c"]').count()) > 0);
 
+// 8b. agents can see the inventory but not change it
+await page.goto(B + '/inventory', { waitUntil: 'load' });
+ok('agent sees the parts catalogue', (await page.locator('text=Parts catalogue').count()) > 0);
+ok('agent cannot add or edit parts', (await page.locator('a:has-text("Add part")').count()) === 0);
+
 // 9. signing out really ends the session
 await page.goto(B + '/', { waitUntil: 'load' });
 await hydrated();
@@ -212,6 +219,123 @@ if (await approve.count()) {
 } else {
   ok('dispatch approved', false);
 }
+
+/** The big number on a stat tile, found by its label. */
+const statValue = async (label) =>
+  Number(
+    (await page.locator(`xpath=//p[normalize-space()="${label}"]/../following-sibling::p[1]`).first().textContent())
+      .replace(/[^\d.-]/g, ''),
+  );
+
+// 12. the calls, chats and emails report is there for a manager
+await page.goto(B + '/performance/channels?period=30', { waitUntil: 'load' });
+ok('manager reaches the calls, chats and emails report',
+   (await page.locator('text=Who handled what').count()) > 0 &&
+   (await page.locator('text=Calls answered').count()) > 0);
+if (OUT) await page.screenshot({ path: `${OUT}/channels.png`, fullPage: true });
+
+// 13. a chargeable parts order is priced live, placed, and held for payment
+await page.goto(B + '/inventory?q=HP-LED-REMOTE', { waitUntil: 'load' });
+const remoteHref = await page.getAttribute('a[href^="/inventory/c"]', 'href');
+await page.goto(B + remoteHref, { waitUntil: 'load' });
+const shelfBefore = await statValue('On the shelf');
+
+await page.goto(B + '/orders?view=active', { waitUntil: 'load' });
+const orderHref = await page.getAttribute('a[href^="/orders/c"]', 'href');
+await page.goto(B + orderHref, { waitUntil: 'load' });
+// A fresh document for the form, so the order's server action is the first
+// streamed response it has to deliver (see `moveFirst` above).
+const newOrderHref = await page.locator('a:has-text("Order parts")').first().getAttribute('href');
+await page.goto(B + newOrderHref, { waitUntil: 'load' });
+await hydrated();
+await page.click('label:has-text("Chargeable")');
+await page.fill('#reason', 'E2E check — customer buying a spare remote handset');
+await page.fill('#part-search', 'HP-LED-REMOTE');
+await page.keyboard.press('Enter');
+await page.waitForTimeout(300);
+// £35.00 + £9.95 delivery = £44.95 ex VAT; £8.99 VAT; £53.94 to pay.
+const quoted = await page.locator('dt:has-text("Customer pays") + dd').textContent();
+ok(`order priced live with VAT and delivery (${quoted})`, quoted.includes('53.94'));
+await page.click('button:has-text("Place order")');
+// Headless Chromium sometimes drops the redirect's follow-up stream (see
+// `moveFirst`), even though the order was placed. If the page has not moved on,
+// open the newest order for this part — the reason check below proves it is ours.
+const redirected = await page
+  .waitForURL(/\/parts-orders\/c/, { timeout: 12000 })
+  .then(() => true, () => false);
+if (!redirected) {
+  await page.goto(B + '/parts-orders?view=all&q=HP-LED-REMOTE', { waitUntil: 'load' });
+  await page.goto(B + (await page.getAttribute('a[href^="/parts-orders/c"]', 'href')), { waitUntil: 'load' });
+}
+await hydrated();
+ok('placing the order produces the confirmation', (await page.locator('text=Order confirmation').count()) > 0);
+ok('it is the order just placed', (await page.locator('text=E2E check — customer buying a spare remote handset').count()) > 0);
+ok('a chargeable order waits for payment', (await page.locator('text=Awaiting payment').count()) > 0);
+const spRef = (await page.locator('h1').first().textContent()).split(' — ')[0].trim();
+const confirmationUrl = page.url().split('?')[0];
+if (OUT) await page.screenshot({ path: `${OUT}/parts-order.png`, fullPage: true });
+
+// 14. taking payment releases it to the warehouse
+await page.goto(confirmationUrl, { waitUntil: 'load' });
+await hydrated();
+await page.fill('#paymentRef', 'Card ending 4242');
+await page.click('button:has-text("paid")');
+await page.waitForTimeout(2500);
+await page.goto(confirmationUrl, { waitUntil: 'load' });
+ok(`${spRef} paid and released to the warehouse`,
+   (await page.locator('span:text-is("Paid")').count()) > 0 &&
+   (await page.locator('span:text-is("Approved")').count()) > 0);
+
+// 15. picking takes it off the shelf, through the ledger
+await page.goto(B + `/dispatch?view=open&q=${spRef}`, { waitUntil: 'load' });
+await hydrated();
+await page.locator('button:has-text("Start picking")').first().click();
+await page.waitForTimeout(2500);
+await page.goto(B + remoteHref, { waitUntil: 'load' });
+const shelfAfter = await statValue('On the shelf');
+ok(`picking takes stock off the shelf (${shelfBefore} -> ${shelfAfter})`, shelfAfter === shelfBefore - 1);
+ok('the stock ledger records the pick', (await page.locator('td:has-text("Picked for dispatch")').count()) > 0);
+
+// 16. a key date is added to the order and ticked off
+await page.goto(B + orderHref, { waitUntil: 'load' });
+await hydrated();
+const label = `E2E check — call about adding blinds ${Date.now()}`;
+await page.click('button:has-text("Add a date")');
+await page.selectOption('#date-kind', 'FOLLOW_UP');
+await page.fill('#date-label', label);
+await page.fill('#date-date', '2030-01-15');
+await page.locator('form:has(#date-kind) button[type=submit]').click();
+await page.waitForTimeout(2500);
+await page.reload({ waitUntil: 'load' });
+await hydrated();
+ok('key date added to the order', (await page.locator(`button[aria-label="Mark ${label} done"]`).count()) === 1);
+await page.click(`button[aria-label="Mark ${label} done"]`);
+await page.waitForTimeout(2500);
+await page.reload({ waitUntil: 'load' });
+ok('key date ticked off', (await page.locator(`button[aria-label="Reopen ${label}"]`).count()) === 1);
+if (OUT) await page.screenshot({ path: `${OUT}/order.png`, fullPage: true });
+
+// 17. receiving a purchase order books it into stock
+await page.goto(B + '/inventory/purchasing?view=open', { waitUntil: 'load' });
+const sent = page.locator('a[href^="/inventory/purchasing/c"]:has(span:text-is("On order"))').first();
+if (await sent.count()) {
+  const poHref = await sent.getAttribute('href');
+  await page.goto(B + poHref, { waitUntil: 'load' });
+  const linePart = await page.getAttribute('table a[href^="/inventory/c"]', 'href');
+  const lineQty = Number((await page.locator('table tbody tr').first().locator('td').nth(1).textContent()).trim());
+  await page.goto(B + linePart, { waitUntil: 'load' });
+  const before = await statValue('On the shelf');
+  await page.goto(B + poHref, { waitUntil: 'load' });
+  await hydrated();
+  await page.click('button:has-text("Receive into stock")');
+  await page.waitForTimeout(2500);
+  await page.goto(B + linePart, { waitUntil: 'load' });
+  const after = await statValue('On the shelf');
+  ok(`receiving books stock in (${before} -> ${after})`, after === before + lineQty);
+} else {
+  ok('receiving books stock in (no open purchase order to receive)', false);
+}
+
 await page.goto(B + '/board', { waitUntil: 'load' });
 if (OUT) await page.screenshot({ path: `${OUT}/board.png`, fullPage: true });
 

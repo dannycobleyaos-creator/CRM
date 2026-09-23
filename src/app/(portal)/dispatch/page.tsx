@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import type { Prisma } from '@prisma/client';
-import { AlertTriangle, Boxes, ClipboardCheck, PackageCheck, Truck } from 'lucide-react';
+import { AlertTriangle, Boxes, ClipboardCheck, PackageCheck, PackagePlus, Truck } from 'lucide-react';
 
 import { requireUser } from '@/lib/auth';
 import { db } from '@/lib/db';
@@ -15,9 +15,14 @@ import { FilterTabs } from '@/components/ui/filter-tabs';
 import { SearchField } from '@/components/ui/search-field';
 import { Badge, TONE_DOTS } from '@/components/ui/badge';
 import { Avatar } from '@/components/ui/avatar';
-import { DispatchStatusChip, PriorityChip } from '@/components/status-chips';
+import { ButtonLink } from '@/components/ui/button';
+import {
+  BillingChip,
+  DispatchStatusChip,
+  PaymentChip,
+  PriorityChip,
+} from '@/components/status-chips';
 import { DispatchActions } from '@/components/dispatch/dispatch-actions';
-import { NewDispatchForm } from '@/components/dispatch/new-dispatch-form';
 
 export const metadata: Metadata = { title: 'Parts dispatch' };
 export const dynamic = 'force-dynamic';
@@ -42,12 +47,13 @@ export default async function DispatchPage({ searchParams }: { searchParams: Pro
       { ref: { contains: q } },
       { customer: { name: { contains: q } } },
       { trackingRef: { contains: q } },
+      { partsOrder: { ref: { contains: q } } },
     ];
   }
 
   const today = startOfDay(new Date());
 
-  const [requests, customers, parts, lowStock, stats] = await Promise.all([
+  const [requests, lowStock, stats] = await Promise.all([
     db.partRequest.findMany({
       where,
       orderBy: [{ dueAt: 'asc' }, { requestedAt: 'asc' }],
@@ -57,11 +63,12 @@ export default async function DispatchPage({ searchParams }: { searchParams: Pro
         ticket: { select: { id: true, ref: true } },
         requestedBy: { select: { name: true, avatarTone: true } },
         lines: { include: { part: true } },
+        partsOrder: {
+          select: { id: true, ref: true, billing: true, paymentStatus: true, status: true },
+        },
       },
     }),
-    db.customer.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true, ref: true }, take: 300 }),
-    db.part.findMany({ orderBy: { name: 'asc' }, select: { id: true, sku: true, name: true, stockQty: true } }),
-    db.part.findMany({ orderBy: { stockQty: 'asc' }, take: 40 }),
+    db.part.findMany({ where: { isActive: true }, orderBy: { stockQty: 'asc' }, take: 40 }),
     Promise.all([
       db.partRequest.count({ where: { status: 'REQUESTED' } }),
       db.partRequest.count({ where: { status: { in: ['APPROVED', 'PICKING'] } } }),
@@ -90,7 +97,7 @@ export default async function DispatchPage({ searchParams }: { searchParams: Pro
             action="/dispatch"
             defaultValue={q}
             hidden={{ view }}
-            placeholder="Reference, customer, tracking…"
+            placeholder="DSP or SP number, customer, tracking…"
           />
         }
       />
@@ -146,10 +153,13 @@ export default async function DispatchPage({ searchParams }: { searchParams: Pro
             { value: 'all', label: 'Everything' },
           ]}
         />
-        <NewDispatchForm customers={customers} parts={parts} />
+        <ButtonLink href="/parts-orders/new" size="sm">
+          <PackagePlus className="h-4 w-4" />
+          Send parts out
+        </ButtonLink>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,2.4fr)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,2.4fr)_minmax(0,1fr)]">
         <Card>
           <CardHeader
             eyebrow={`${requests.length} ${requests.length === 1 ? 'dispatch' : 'dispatches'}`}
@@ -176,6 +186,14 @@ export default async function DispatchPage({ searchParams }: { searchParams: Pro
                             <Badge tone="clay" dot>
                               Overdue
                             </Badge>
+                          )}
+                          {r.partsOrder && (
+                            <>
+                              <BillingChip value={r.partsOrder.billing} dot={false} />
+                              {r.partsOrder.paymentStatus === 'AWAITING' && (
+                                <PaymentChip value="AWAITING" />
+                              )}
+                            </>
                           )}
                         </div>
 
@@ -215,6 +233,14 @@ export default async function DispatchPage({ searchParams }: { searchParams: Pro
                             />
                             Raised by {r.requestedBy.name} {relativeTime(r.requestedAt)}
                           </span>
+                          {r.partsOrder && (
+                            <Link
+                              href={`/parts-orders/${r.partsOrder.id}`}
+                              className="font-mono hover:text-ember-dark"
+                            >
+                              {r.partsOrder.ref}
+                            </Link>
+                          )}
                           {r.ticket && (
                             <Link href={`/cases/${r.ticket.id}`} className="hover:text-ember-dark">
                               {r.ticket.ref}
@@ -236,6 +262,9 @@ export default async function DispatchPage({ searchParams }: { searchParams: Pro
                           status={r.status}
                           carrier={r.carrier}
                           trackingRef={r.trackingRef}
+                          awaitingPaymentOn={
+                            r.partsOrder?.paymentStatus === 'AWAITING' ? r.partsOrder.ref : undefined
+                          }
                         />
                       </div>
                     </div>
@@ -263,13 +292,13 @@ export default async function DispatchPage({ searchParams }: { searchParams: Pro
               <ul className="divide-y divide-stone/60">
                 {belowReorder.map((p) => (
                   <li key={p.id} className="flex items-center justify-between gap-3 px-5 py-3">
-                    <div className="min-w-0">
+                    <Link href={`/inventory/${p.id}`} className="min-w-0 hover:text-ember-dark">
                       <p className="truncate text-xs font-medium text-ink">{p.name}</p>
                       <p className="font-mono text-2xs text-slate">
                         {p.sku}
                         {p.location ? ` · bay ${p.location}` : ''}
                       </p>
-                    </div>
+                    </Link>
                     <Badge tone={p.stockQty <= 0 ? 'clay' : 'amber'} dot>
                       {p.stockQty} / {p.reorderLevel}
                     </Badge>

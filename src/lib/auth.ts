@@ -107,11 +107,24 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
 
 export async function requireUser(): Promise<SessionUser> {
   const user = await getSessionUser();
-  if (!user) redirect('/login');
+  if (!user) {
+    // A cookie whose person has been deactivated or removed still passes the
+    // middleware's signature check, so it has to be cleared on the way out —
+    // otherwise /login sends them straight back here, round and round.
+    const jar = await cookies();
+    redirect(jar.has(SESSION_COOKIE) ? '/api/session/end' : '/login');
+  }
   return user;
 }
 
 export const isManagement = (role: Role) => MANAGEMENT_ROLES.includes(role);
+
+/**
+ * Who may change prices, stock levels, bills of materials and purchase orders:
+ * management and the warehouse. Everybody can see the inventory and order parts.
+ */
+export const canManageStock = (user: Pick<SessionUser, 'role' | 'team'>) =>
+  isManagement(user.role) || user.team === 'Warehouse';
 
 /**
  * Management-only screens. Agents are sent back to their own dashboard rather

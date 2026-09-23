@@ -38,12 +38,17 @@ export async function setCustomerStage(formData: FormData) {
 
 const noteSchema = z.object({
   customerId: z.string().min(1),
+  orderId: z.string().optional(),
   type: z.enum(['NOTE', 'CALL', 'EMAIL', 'SMS', 'CHAT']),
   summary: z.string().min(2, 'Say what happened'),
   body: z.string().optional(),
 });
 
-/** Anything logged here is what the next agent will read before they call. */
+/**
+ * Anything logged here is what the next agent will read before they call.
+ * Logged from an order, it lands on the order's history as well as the
+ * customer's, so neither view is ever missing part of the story.
+ */
 export async function logCustomerActivity(
   _prev: ActionState,
   formData: FormData,
@@ -58,6 +63,7 @@ export async function logCustomerActivity(
 
   const parsed = noteSchema.safeParse({
     customerId: formString(formData, 'customerId') ?? '',
+    orderId: formString(formData, 'orderId'),
     ...submitted,
     body: formString(formData, 'body'),
   });
@@ -69,6 +75,15 @@ export async function logCustomerActivity(
     };
   }
 
+  const { orderId } = parsed.data;
+  if (orderId) {
+    const order = await db.order.findFirst({
+      where: { id: orderId, customerId: parsed.data.customerId },
+      select: { id: true },
+    });
+    if (!order) return { error: 'That order belongs to a different customer', values: submitted };
+  }
+
   await db.activity.create({
     data: {
       type: parsed.data.type,
@@ -76,11 +91,13 @@ export async function logCustomerActivity(
       summary: parsed.data.summary,
       body: parsed.data.body ?? null,
       customerId: parsed.data.customerId,
+      orderId: orderId ?? null,
       userId: user.id,
       sourceSystem: 'CRM',
     },
   });
 
   revalidatePath(`/customers/${parsed.data.customerId}`);
+  if (orderId) revalidatePath(`/orders/${orderId}`);
   return { ok: true };
 }

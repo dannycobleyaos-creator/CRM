@@ -2,11 +2,15 @@ import Link from 'next/link';
 import {
   AlarmClock,
   ArrowUpRight,
+  CalendarClock,
   CalendarDays,
   CheckCircle2,
   Inbox,
+  Mail,
   Megaphone,
+  MessageSquare,
   PackageCheck,
+  Phone,
   Sparkles,
   TriangleAlert,
 } from 'lucide-react';
@@ -20,7 +24,7 @@ import {
   TICKET_ON_US_STATUSES,
   type Priority,
 } from '@/lib/constants';
-import { endOfDay, percent, relativeTime } from '@/lib/utils';
+import { addDays, cn, endOfDay, formatTime, isToday, percent, relativeTime, startOfDay } from '@/lib/utils';
 
 import { Card, CardBody, CardHeader, EmptyState } from '@/components/ui/card';
 import { ButtonLink } from '@/components/ui/button';
@@ -33,6 +37,7 @@ import { CaseTable, caseRowSelect } from '@/components/work/case-row';
 import {
   AnnouncementCategoryChip,
   DispatchStatusChip,
+  OrderDateChip,
   PriorityChip,
 } from '@/components/status-chips';
 
@@ -43,7 +48,7 @@ export default async function DashboardPage() {
   const now = new Date();
   const summary = await getDaySummary(user.id, user.dailyTarget);
 
-  const [myTasks, myCases, unassignedCases, announcements, reads, myDispatches] =
+  const [myTasks, myCases, unassignedCases, announcements, reads, myDispatches, myDates, contactsToday] =
     await Promise.all([
       db.task.findMany({
         where: {
@@ -88,7 +93,31 @@ export default async function DashboardPage() {
           lines: { select: { qty: true } },
         },
       }),
+      // Deliveries, installs, payments and calls on orders that are yours to see through.
+      db.orderDate.findMany({
+        where: {
+          ownerId: user.id,
+          doneAt: null,
+          dueAt: { lte: endOfDay(addDays(now, 7)) },
+          order: { status: { not: 'CANCELLED' } },
+        },
+        orderBy: { dueAt: 'asc' },
+        take: 6,
+        include: { order: { select: { id: true, ref: true, customer: { select: { name: true } } } } },
+      }),
+      db.activity.groupBy({
+        by: ['type'],
+        where: {
+          userId: user.id,
+          type: { in: ['CALL', 'CHAT', 'EMAIL'] },
+          occurredAt: { gte: startOfDay(now) },
+        },
+        _count: { _all: true },
+      }),
     ]);
+
+  const contactCount = (type: string) =>
+    contactsToday.find((row) => row.type === type)?._count._all ?? 0;
 
   // "Clear the red first" has to be literally true, so the deadline outranks
   // the priority flag: overdue, then due today, then everything else by urgency.
@@ -154,6 +183,21 @@ export default async function DashboardPage() {
               {summary.tasksOverdue > 0
                 ? `${summary.tasksOverdue} overdue ${summary.tasksOverdue === 1 ? 'task is' : 'tasks are'} holding you up.`
                 : 'Nothing overdue — keep it that way.'}
+            </p>
+            <p className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-2xs text-slate">
+              <span className="uppercase tracking-brand">Handled today</span>
+              <span className="inline-flex items-center gap-1.5">
+                <Phone className="h-3.5 w-3.5" />
+                <span className="font-semibold tabular-nums text-ink">{contactCount('CALL')}</span> calls
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <MessageSquare className="h-3.5 w-3.5" />
+                <span className="font-semibold tabular-nums text-ink">{contactCount('CHAT')}</span> chats
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <Mail className="h-3.5 w-3.5" />
+                <span className="font-semibold tabular-nums text-ink">{contactCount('EMAIL')}</span> emails
+              </span>
             </p>
           </div>
 
@@ -228,7 +272,7 @@ export default async function DashboardPage() {
         />
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         {/* Main column */}
         <div className="space-y-6">
           <Card>
@@ -298,6 +342,55 @@ export default async function DashboardPage() {
 
         {/* Side column */}
         <div className="space-y-6">
+          <Card className={myDates.some((d) => d.dueAt < now) ? 'border-clay/30' : undefined}>
+            <CardHeader
+              eyebrow="Your orders"
+              title="Key dates this week"
+              action={
+                <ButtonLink href="/orders?who=mine" variant="ghost" size="sm">
+                  Diary
+                </ButtonLink>
+              }
+            />
+            {myDates.length ? (
+              <ul className="divide-y divide-stone/60">
+                {myDates.map((d) => {
+                  const overdue = d.dueAt < now;
+                  const today = !overdue && isToday(d.dueAt);
+                  return (
+                    <li key={d.id}>
+                      <Link href={`/orders/${d.order.id}`} className="flex items-start gap-3 px-5 py-3 hover:bg-sand/40">
+                        <div className={cn('w-10 shrink-0 text-center', overdue ? 'text-clay' : today ? 'text-amber' : 'text-ink')}>
+                          <p className="text-2xs font-semibold uppercase tracking-brand">
+                            {d.dueAt.toLocaleDateString('en-GB', { month: 'short' })}
+                          </p>
+                          <p className="font-display text-lg font-light leading-none">{d.dueAt.getDate()}</p>
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <OrderDateChip value={d.kind} dot={false} />
+                            {overdue && <Badge tone="clay" dot>Overdue</Badge>}
+                            {today && <Badge tone="amber" dot>Today {formatTime(d.dueAt)}</Badge>}
+                          </div>
+                          <p className="mt-1 truncate text-sm font-medium text-ink">{d.order.customer.name}</p>
+                          <p className="truncate text-2xs text-slate">
+                            {d.label} · {d.order.ref} · {relativeTime(d.dueAt, now)}
+                          </p>
+                        </div>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <EmptyState
+                icon={<CalendarClock className="h-5 w-5" />}
+                title="No order dates this week"
+                description="Deliveries, installs and calls you are responsible for will show here."
+              />
+            )}
+          </Card>
+
           <Card>
             <CardHeader
               eyebrow="Noticeboard"

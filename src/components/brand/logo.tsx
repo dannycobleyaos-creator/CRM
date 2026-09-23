@@ -43,12 +43,15 @@ type WordmarkProps = {
   variant?: 'light' | 'dark';
   /** Hides the "Pergola / CRM" sub-line, for tight spaces. */
   compact?: boolean;
+  /** The sub-line text. Documents a customer receives say "Pergola", not "CRM". */
+  subline?: string;
   className?: string;
 };
 
 export function HyggeWordmark({
   variant = 'dark',
   compact = false,
+  subline = 'Pergola · CRM',
   className,
 }: WordmarkProps) {
   const isLight = variant === 'light';
@@ -80,7 +83,7 @@ export function HyggeWordmark({
               isLight ? 'text-mist/80' : 'text-slate',
             )}
           >
-            Pergola · CRM
+            {subline}
           </span>
         )}
       </span>

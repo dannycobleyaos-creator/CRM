@@ -1,12 +1,18 @@
 import { Badge } from '@/components/ui/badge';
 import {
   ANNOUNCEMENT_CATEGORY_META,
+  BILLING_META,
   CUSTOMER_STAGE_META,
   DISPATCH_STATUS_META,
+  ORDER_DATE_META,
   ORDER_STATUS_META,
+  PART_CATEGORY_META,
+  PAYMENT_STATUS_META,
   PRIORITY_META,
+  PURCHASE_ORDER_STATUS_META,
   ROLE_META,
   SOURCE_META,
+  STOCK_MOVE_META,
   TASK_CATEGORY_META,
   TASK_STATUS_META,
   TICKET_CATEGORY_META,
@@ -52,6 +58,46 @@ export const TaskCategoryChip = chip(TASK_CATEGORY_META, 'TaskCategoryChip');
 export const SourceChip = chip(SOURCE_META, 'SourceChip');
 export const RoleChip = chip(ROLE_META, 'RoleChip');
 export const AnnouncementCategoryChip = chip(ANNOUNCEMENT_CATEGORY_META, 'AnnouncementCategoryChip');
+export const PartCategoryChip = chip(PART_CATEGORY_META, 'PartCategoryChip');
+export const StockMoveChip = chip(STOCK_MOVE_META, 'StockMoveChip');
+export const BillingChip = chip(BILLING_META, 'BillingChip');
+export const PaymentChip = chip(PAYMENT_STATUS_META, 'PaymentChip');
+export const PurchaseStatusChip = chip(PURCHASE_ORDER_STATUS_META, 'PurchaseStatusChip');
+export const OrderDateChip = chip(ORDER_DATE_META, 'OrderDateChip');
+
+/**
+ * Stock at a glance, in the same colour language as everything else: red is
+ * nothing on the shelf, amber is time to reorder, green is fine.
+ */
+export function StockBadge({
+  qty,
+  reorderLevel,
+  compact = false,
+}: {
+  qty: number;
+  reorderLevel: number;
+  compact?: boolean;
+}) {
+  if (qty <= 0) {
+    return (
+      <Badge tone="clay" dot>
+        {compact ? '0' : 'Out of stock'}
+      </Badge>
+    );
+  }
+  if (qty <= reorderLevel) {
+    return (
+      <Badge tone="amber" dot title={`At or below the reorder level of ${reorderLevel}`}>
+        {compact ? qty : `${qty} · reorder`}
+      </Badge>
+    );
+  }
+  return (
+    <Badge tone="moss" dot>
+      {compact ? qty : `${qty} in stock`}
+    </Badge>
+  );
+}
 
 /** The deadline chip: says how long is left, and goes red the moment it isn't. */
 export function SlaChip({

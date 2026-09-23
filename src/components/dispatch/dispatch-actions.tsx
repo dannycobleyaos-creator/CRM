@@ -40,11 +40,14 @@ export function DispatchActions({
   status,
   carrier,
   trackingRef,
+  awaitingPaymentOn,
 }: {
   requestId: string;
   status: string;
   carrier: string | null;
   trackingRef: string | null;
+  /** The parts order this dispatch is waiting on payment for, if any. */
+  awaitingPaymentOn?: string;
 }) {
   const router = useRouter();
   const [state, formAction] = useActionState<ActionState, FormData>(advanceDispatch, {});
@@ -55,8 +58,11 @@ export function DispatchActions({
     if (state.ok) router.refresh();
   }, [state.ok, router]);
 
-  const steps = NEXT_STEPS[status] ?? [];
-  const canDispatch = CAN_DISPATCH.includes(status);
+  // A paid-for order is released by its payment — until then the only thing
+  // the warehouse can do with it is reject it.
+  const held = !!awaitingPaymentOn && status === 'REQUESTED';
+  const steps = (NEXT_STEPS[status] ?? []).filter((s) => !held || s.status === 'CANCELLED');
+  const canDispatch = CAN_DISPATCH.includes(status) && !held;
 
   if (!steps.length && !canDispatch) {
     return state.error ? (
@@ -69,6 +75,12 @@ export function DispatchActions({
   return (
     <form action={formAction} className="space-y-2.5">
       <input type="hidden" name="requestId" value={requestId} />
+
+      {held && (
+        <p className="rounded-brand bg-amber-soft px-3 py-2 text-2xs text-amber">
+          Held until {awaitingPaymentOn} is paid — it will be approved automatically.
+        </p>
+      )}
 
       {canDispatch && (
         <div className="grid gap-2 sm:grid-cols-2">

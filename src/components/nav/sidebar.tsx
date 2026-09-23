@@ -98,7 +98,7 @@ export function Sidebar({
   return (
     <>
       {/* Mobile bar */}
-      <div className="sticky top-0 z-40 flex items-center justify-between border-b border-stone bg-white px-4 py-3 lg:hidden">
+      <div className="sticky top-0 z-40 flex items-center justify-between border-b border-stone bg-white px-4 py-3 lg:hidden print:hidden">
         <HyggeWordmark compact />
         <button
           type="button"
@@ -120,7 +120,7 @@ export function Sidebar({
 
       <aside
         className={cn(
-          'brand-canvas fixed inset-y-0 left-0 z-50 flex w-[268px] flex-col transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0',
+          'brand-canvas fixed inset-y-0 left-0 z-50 flex w-[268px] flex-col transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 print:hidden',
           open ? 'translate-x-0' : '-translate-x-full',
         )}
       >

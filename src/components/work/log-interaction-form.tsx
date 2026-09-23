@@ -39,9 +39,14 @@ function Submit() {
 export function LogInteractionForm({
   ticketId,
   customerId,
+  orderId,
+  placeholder = 'Called and confirmed the replacement blade is on its way',
 }: {
   ticketId?: string;
   customerId?: string;
+  /** Logged against an order as well as its customer. */
+  orderId?: string;
+  placeholder?: string;
 }) {
   const action = ticketId ? logInteraction : logCustomerActivity;
   const [state, formAction] = useActionState<ActionState, FormData>(action, {});
@@ -62,6 +67,7 @@ export function LogInteractionForm({
     <form ref={formRef} action={formAction} className="space-y-3">
       {ticketId && <input type="hidden" name="ticketId" value={ticketId} />}
       {customerId && <input type="hidden" name="customerId" value={customerId} />}
+      {orderId && <input type="hidden" name="orderId" value={orderId} />}
 
       <fieldset>
         <legend className="field-label">What happened?</legend>
@@ -97,7 +103,7 @@ export function LogInteractionForm({
           id="summary"
           name="summary"
           required
-          placeholder="Called and confirmed the replacement blade is on its way"
+          placeholder={placeholder}
           defaultValue={typed.summary ?? ''}
           className="field"
         />

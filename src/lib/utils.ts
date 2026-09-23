@@ -18,6 +18,22 @@ const gbp = new Intl.NumberFormat('en-GB', {
 
 export const formatMoney = (value: number) => gbp.format(value ?? 0);
 
+const gbpExact = new Intl.NumberFormat('en-GB', {
+  style: 'currency',
+  currency: 'GBP',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+/** Pounds and pence — for parts, order lines and anything a customer is invoiced. */
+export const formatPrice = (value: number) => gbpExact.format(value ?? 0);
+
+/** Money arithmetic in pence, so £0.10 + £0.20 is £0.30 and not £0.30000000000000004. */
+export const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+
+/** Whole number with thousands separators — 12,480. */
+export const formatCount = (value: number) => (value ?? 0).toLocaleString('en-GB');
+
 export const formatDate = (value?: Date | string | null) =>
   value
     ? new Date(value).toLocaleDateString('en-GB', {
@@ -62,6 +78,13 @@ export function formatSeconds(seconds?: number | null): string {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return `${m}m ${String(s).padStart(2, '0')}s`;
+}
+
+/** Time on the phone, in hours and minutes however long it runs — "312h 20m". */
+export function formatTalkTime(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.round((seconds % 3600) / 60);
+  return h ? `${h.toLocaleString('en-GB')}h ${m}m` : `${m}m`;
 }
 
 /** "2h ago" / "in 35m" — the phrasing agents actually scan for. */

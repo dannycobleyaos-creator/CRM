@@ -13,7 +13,7 @@ export default function Loading() {
           <div key={i} className="card h-28 bg-sand/40" />
         ))}
       </div>
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <div className="card h-80 bg-sand/40" />
         <div className="card h-80 bg-sand/40" />
       </div>

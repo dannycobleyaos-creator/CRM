@@ -4,15 +4,17 @@ import { SearchX } from 'lucide-react';
 
 import { requireUser } from '@/lib/auth';
 import { db } from '@/lib/db';
-import { formatMoney, relativeTime } from '@/lib/utils';
+import { formatMoney, formatPrice, relativeTime } from '@/lib/utils';
 
 import { Card, CardHeader, EmptyState } from '@/components/ui/card';
 import { PageHeader } from '@/components/ui/page-header';
 import { GlobalSearch } from '@/components/nav/global-search';
 import {
+  BillingChip,
   CustomerStageChip,
   DispatchStatusChip,
   OrderStatusChip,
+  StockBadge,
   TicketStatusChip,
 } from '@/components/status-chips';
 
@@ -28,9 +30,9 @@ export default async function SearchPage({
   const { q } = await searchParams;
   const term = q?.trim() ?? '';
 
-  // One box, four record types — the point being that an agent never has to
+  // One box, every record type — the point being that an agent never has to
   // know which system a reference belongs to.
-  const [customers, tickets, orders, dispatches] = term
+  const [customers, tickets, orders, dispatches, partsOrders, parts] = term
     ? await Promise.all([
         db.customer.findMany({
           where: {
@@ -59,19 +61,39 @@ export default async function SearchPage({
         db.partRequest.findMany({
           where: { OR: [{ ref: { contains: term } }, { trackingRef: { contains: term } }] },
           take: 12,
-          include: { customer: { select: { id: true, name: true } } },
+          include: {
+            customer: { select: { id: true, name: true } },
+            partsOrder: { select: { id: true } },
+          },
+        }),
+        db.partsOrder.findMany({
+          where: { OR: [{ ref: { contains: term } }, { paymentRef: { contains: term } }] },
+          take: 12,
+          orderBy: { placedAt: 'desc' },
+          include: { customer: { select: { name: true } } },
+        }),
+        db.part.findMany({
+          where: { OR: [{ sku: { contains: term } }, { name: { contains: term } }] },
+          take: 12,
+          orderBy: { name: 'asc' },
         }),
       ])
-    : [[], [], [], []];
+    : [[], [], [], [], [], []];
 
-  const total = customers.length + tickets.length + orders.length + dispatches.length;
+  const total =
+    customers.length +
+    tickets.length +
+    orders.length +
+    dispatches.length +
+    partsOrders.length +
+    parts.length;
 
   return (
     <>
       <PageHeader
         eyebrow="Find anything"
         title={term ? `Results for “${term}”` : 'Search'}
-        description="Customers, cases, orders and dispatches — one box for all of them."
+        description="Customers, cases, orders, parts and dispatches — one box for all of them."
         actions={<GlobalSearch defaultValue={term} />}
       />
 
@@ -80,7 +102,7 @@ export default async function SearchPage({
           <EmptyState
             icon={<SearchX className="h-5 w-5" />}
             title="Type something to search"
-            description="A name, a postcode, a case reference like CASE-4231, an order number or a courier tracking reference."
+            description="A name, a postcode, a case reference like CASE-4231, an order or parts order number, a part SKU or a courier tracking reference."
           />
         </Card>
       ) : total === 0 ? (
@@ -92,7 +114,7 @@ export default async function SearchPage({
           />
         </Card>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           {customers.length > 0 && (
             <Card>
               <CardHeader eyebrow={`${customers.length} found`} title="Customers" />
@@ -144,10 +166,7 @@ export default async function SearchPage({
               <ul className="divide-y divide-stone/60">
                 {orders.map((o) => (
                   <li key={o.id}>
-                    <Link
-                      href={`/customers/${o.customer.id}`}
-                      className="block px-5 py-3 hover:bg-sand/40"
-                    >
+                    <Link href={`/orders/${o.id}`} className="block px-5 py-3 hover:bg-sand/40">
                       <div className="flex items-center justify-between gap-3">
                         <span className="truncate text-sm font-medium text-ink">
                           {o.productLine}
@@ -172,7 +191,7 @@ export default async function SearchPage({
                 {dispatches.map((d) => (
                   <li key={d.id}>
                     <Link
-                      href={`/customers/${d.customer.id}`}
+                      href={d.partsOrder ? `/parts-orders/${d.partsOrder.id}` : `/customers/${d.customer.id}`}
                       className="block px-5 py-3 hover:bg-sand/40"
                     >
                       <div className="flex items-center justify-between gap-3">
@@ -184,6 +203,52 @@ export default async function SearchPage({
                       <p className="mt-0.5 text-2xs text-slate">
                         <span className="font-mono">{d.ref}</span>
                         {d.trackingRef ? ` · ${d.carrier} ${d.trackingRef}` : ''}
+                      </p>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
+
+          {partsOrders.length > 0 && (
+            <Card>
+              <CardHeader eyebrow={`${partsOrders.length} found`} title="Parts orders" />
+              <ul className="divide-y divide-stone/60">
+                {partsOrders.map((p) => (
+                  <li key={p.id}>
+                    <Link href={`/parts-orders/${p.id}`} className="block px-5 py-3 hover:bg-sand/40">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="truncate text-sm font-medium text-ink">{p.customer.name}</span>
+                        <BillingChip value={p.billing} dot={false} />
+                      </div>
+                      <p className="mt-0.5 text-2xs text-slate">
+                        <span className="font-mono">{p.ref}</span> ·{' '}
+                        {p.billing === 'CHARGEABLE' ? formatPrice(p.total) : 'no charge'} ·{' '}
+                        {relativeTime(p.placedAt)}
+                        {p.status === 'CANCELLED' ? ' · cancelled' : ''}
+                      </p>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
+
+          {parts.length > 0 && (
+            <Card>
+              <CardHeader eyebrow={`${parts.length} found`} title="Parts" />
+              <ul className="divide-y divide-stone/60">
+                {parts.map((p) => (
+                  <li key={p.id}>
+                    <Link href={`/inventory/${p.id}`} className="block px-5 py-3 hover:bg-sand/40">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="truncate text-sm font-medium text-ink">{p.name}</span>
+                        <StockBadge qty={p.stockQty} reorderLevel={p.reorderLevel} />
+                      </div>
+                      <p className="mt-0.5 text-2xs text-slate">
+                        <span className="font-mono">{p.sku}</span> · {formatPrice(p.unitPrice)} ex VAT
+                        {p.location ? ` · bay ${p.location}` : ''}
                       </p>
                     </Link>
                   </li>

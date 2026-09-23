@@ -6,7 +6,7 @@ import { ButtonLink } from '@/components/ui/button';
 
 export function Topbar({ greeting, subline }: { greeting: string; subline: string }) {
   return (
-    <header className="sticky top-0 z-30 hidden border-b border-stone bg-linen/85 backdrop-blur lg:block">
+    <header className="sticky top-0 z-30 hidden border-b border-stone bg-linen/85 backdrop-blur lg:block print:hidden">
       <div className="flex items-center gap-6 px-8 py-3.5">
         <div className="min-w-0 shrink-0">
           <p className="truncate font-display text-sm font-medium text-ink">{greeting}</p>
